@@ -1,99 +1,99 @@
 # Elevate Your English | Campus
 
-REST API backend for a professional English academy LMS. Built as a portfolio project demonstrating layered architecture, domain-driven design, and security-first API development with Node.js, Express, and MongoDB.
+API REST backend para un sistema de gestión del aprendizaje (LMS) de una academia de inglés profesional. Proyecto de portfolio que demuestra arquitectura por capas, diseño orientado al dominio y desarrollo de APIs con seguridad como prioridad, usando Node.js, Express y MongoDB.
 
 ---
 
-## Overview
+## Descripción general
 
-Elevate Your English Campus is a learning management system for a professional English academy. It supports three roles — **Admin**, **Teacher**, and **Student** — across a full academic lifecycle: course catalog, structured content delivery, lesson progress tracking, knowledge assessments, student enrollment management, and 1-on-1 class booking.
+Elevate Your English Campus es un LMS para una academia de inglés profesional. Soporta tres roles — **Admin**, **Teacher** y **Student** — a lo largo de un ciclo académico completo: catálogo de cursos, entrega estructurada de contenido, seguimiento del progreso por lección, evaluaciones de conocimiento, gestión del ciclo de matrícula y reserva de clases particulares.
 
-The backend exposes a RESTful API consumed by a separate frontend client. Every endpoint enforces JWT authentication and role-based access control.
+El backend expone una API RESTful consumida por un cliente frontend independiente. Cada endpoint aplica autenticación JWT y control de acceso basado en roles.
 
 **Stack:** Node.js · Express · MongoDB · Mongoose · bcryptjs · express-validator · jsonwebtoken
 
 ---
 
-## Business Flow
+## Flujo de negocio
 
 ```
-Admin creates course (draft)
-    └─ adds Units → Lessons → Assessment per unit
-    └─ publishes course
+Admin crea un Course (estado draft)
+    └─ añade Units → Lessons → Assessment por Unit
+    └─ publica el Course
 
-Admin enrolls Student
-    └─ system initialises LessonProgress for every lesson in the course
+Admin matricula a un Student (Enrollment)
+    └─ el sistema inicializa un LessonProgress por cada Lesson del Course
 
-Student works through the course
-    └─ completes lessons in order (sequential unlock per unit)
-    └─ unlocks unit Assessment after completing all lessons in the unit
-    └─ submits Assessment attempt → receives score
-    └─ course marked completed automatically when overall progress reaches 100 %
+Student trabaja el Course
+    └─ completa Lessons en orden (desbloqueo secuencial por Unit)
+    └─ desbloquea el Assessment de la Unit al completar todas sus Lessons
+    └─ envía un intento del Assessment → recibe puntuación
+    └─ el Course se marca como completado automáticamente cuando el progreso global llega al 100 %
 
-Teacher monitors assigned students
-    └─ views enrollment status and progress
-    └─ reviews assessment attempt history (without seeing correct answers)
+Teacher supervisa a sus Students asignados
+    └─ consulta el estado de la Enrollment y el progreso
+    └─ revisa el historial de intentos (sin ver las respuestas correctas)
 
-Admin manages 1-on-1 bookings between Students and their assigned Teachers
+Admin gestiona las reservas de clases particulares entre Students y sus Teachers asignados
 ```
 
 ---
 
-## Architecture
+## Arquitectura
 
-The API follows a strict layered architecture. Dependencies flow in one direction only — from the outermost layer inward.
+La API sigue una arquitectura por capas estricta. Las dependencias fluyen en una única dirección, de la capa más externa hacia la más interna.
 
 ```
-HTTP Request
-     ↓
-[ Routes ]          — Declares endpoints, chains middlewares, delegates to controller
-     ↓
-[ Validators ]      — Sanitizes and validates input via express-validator schemas
-     ↓
-[ Middlewares ]     — Cross-cutting concerns: auth, role enforcement, active-user check
-     ↓
-[ Controllers ]     — Extracts data from req, calls service, returns HTTP response
-     ↓
-[ Services ]        — Business logic, domain rules, orchestration across repositories
-     ↓
-[ Repositories ]    — Data access only; no business logic; all queries isolated here
-     ↓
-[ Models ]          — Mongoose schemas, indexes, field constraints
-     ↓
+Petición HTTP
+      ↓
+[ Routes ]          — Declara endpoints, encadena middlewares, delega al controller
+      ↓
+[ Validators ]      — Sanitiza y valida la entrada mediante schemas de express-validator
+      ↓
+[ Middlewares ]     — Aspectos transversales: autenticación, roles, usuario activo
+      ↓
+[ Controllers ]     — Extrae datos del req, llama al service, devuelve la respuesta HTTP
+      ↓
+[ Services ]        — Lógica de negocio, reglas de dominio, orquestación de repositories
+      ↓
+[ Repositories ]    — Acceso a datos exclusivamente; todas las queries viven aquí
+      ↓
+[ Models ]          — Schemas Mongoose, índices, restricciones de campo
+      ↓
 MongoDB
 ```
 
-**Layer responsibilities:**
+**Responsabilidades por capa:**
 
-| Layer | Owns | Never contains |
-|-------|------|----------------|
-| **Controller** | HTTP interface — req/res handling, status codes | Business rules, database queries |
-| **Service** | Domain logic — validations, orchestration, error semantics | HTTP concerns, direct model access |
-| **Repository** | Query construction, pagination, field whitelisting | Business rules, HTTP concerns |
-| **Model** | Schema definition, indexes, serialization transforms | Any logic beyond schema constraints |
+| Capa | Responsabilidad | Nunca contiene |
+|------|-----------------|----------------|
+| **Controller** | Interfaz HTTP — manejo de req/res, códigos de estado | Reglas de negocio, queries a base de datos |
+| **Service** | Lógica de dominio — validaciones, orquestación, semántica de errores | Aspectos HTTP, acceso directo al modelo |
+| **Repository** | Construcción de queries, paginación, lista blanca de campos | Reglas de negocio, aspectos HTTP |
+| **Model** | Definición del schema, índices, transformaciones de serialización | Cualquier lógica más allá de las restricciones del schema |
 
-**Cross-cutting patterns:**
+**Patrones transversales:**
 
-- `asyncHandler` — wraps every controller in a unified promise rejection catcher, eliminating try/catch boilerplate
-- `validate(schema)` — higher-order middleware that runs express-validator chains and converts failures to structured `ValidationError` responses
-- `ApiError` hierarchy — typed errors (`NotFoundError`, `ConflictError`, `ForbiddenError`…) that the central `errorHandler` middleware serializes consistently
-- `BaseRepository` — generic CRUD base class (`findAll`, `create`, `updateById` with `runValidators: true`) extended by every domain repository
-- Soft delete — no `DELETE` at the database level; `isActive: false` is the only removal mechanism for user-facing records
+- `asyncHandler` — envuelve cada controller en un capturador unificado de promesas rechazadas, eliminando el boilerplate de try/catch
+- `validate(schema)` — middleware de orden superior que ejecuta las cadenas de express-validator y convierte los fallos en respuestas `ValidationError` estructuradas
+- Jerarquía `ApiError` — errores tipados (`NotFoundError`, `ConflictError`, `ForbiddenError`…) que el middleware central `errorHandler` serializa de forma coherente
+- `BaseRepository` — clase base CRUD genérica (`findAll`, `create`, `updateById` con `runValidators: true`) extendida por todos los repositories de dominio
+- Borrado suave — no hay operaciones `DELETE` a nivel de base de datos; `isActive: false` es el único mecanismo de eliminación para registros accesibles desde la API
 
 ---
 
-## Domain Model
+## Modelo de dominio
 
 ```
 ┌─────────────┐        ┌──────────────────┐        ┌──────────────┐
 │    User     │───────▶│  TeacherProfile  │        │    Course    │
-│  (admin /   │        │  (availability,  │        │  (units,     │
-│  teacher /  │        │   bio, etc.)     │        │   lessons)   │
+│  (admin /   │        │  (disponibilidad,│        │  (unidades,  │
+│  teacher /  │        │   bio, etc.)     │        │   lecciones) │
 │  student)   │        └──────────────────┘        └──────┬───────┘
 └──────┬──────┘                                           │
        │                                            ┌─────▼──────┐
-       │  assigned                                  │    Unit    │
-       │  teacher                                   └─────┬──────┘
+       │  teacher                                   │    Unit    │
+       │  asignado                                  └─────┬──────┘
        │                                                  │
        │                                           ┌──────▼──────┐
        │                                           │   Lesson    │
@@ -101,49 +101,49 @@ MongoDB
        │                                                  │
        │         ┌──────────────┐           ┌────────────▼──────────┐
        └────────▶│  Enrollment  │           │    LessonProgress     │
-                 │  (per course)│           │  (per student/lesson) │
+                 │  (por Course)│           │  (por Student/Lesson) │
                  └──────┬───────┘           └───────────────────────┘
                         │
                  ┌──────▼───────┐           ┌───────────────────────┐
                  │  Assessment  │──────────▶│  AssessmentAttempt    │
-                 │  (per unit)  │           │  (answers + score)    │
+                 │  (por Unit)  │           │  (respuestas + nota)  │
                  └──────────────┘           └───────────────────────┘
 ```
 
-**Key relationships:**
+**Relaciones clave:**
 
-- A `User` with role `teacher` may have one `TeacherProfile` (bio, availability slots)
-- A `User` with role `student` may be assigned to one `Teacher` via `assignedTeacherId`
-- `Enrollment` is the join between a `Student` and a `Course` — it tracks overall status and progress percentage
-- `LessonProgress` records each lesson a student has completed — append-only, never reversed
-- `AssessmentAttempt` is immutable after submission — stores a snapshot of answers against the assessment at that point in time
-- `passwordHash` is excluded from all serialization via `select: false` and `toJSON.transform`
+- Un `User` con rol `teacher` puede tener un `TeacherProfile` (bio, disponibilidad)
+- Un `User` con rol `student` puede tener un `Teacher` asignado mediante `assignedTeacherId`
+- `Enrollment` es la unión entre un `Student` y un `Course` — registra el estado general y el porcentaje de progreso
+- `LessonProgress` almacena cada `Lesson` completada por un `Student` — solo append, nunca se revierte
+- `AssessmentAttempt` es inmutable tras su envío — guarda un snapshot de las respuestas en el momento de la corrección; el `Assessment` fuente puede evolucionar sin corromper el historial
+- `passwordHash` queda excluido de toda serialización mediante `select: false` y `toJSON.transform`
 
 ---
 
-## Project Structure
+## Estructura del proyecto
 
 ```
 backend/
 ├── src/
-│   ├── server.js                   # Entry point — connects DB, starts Express server
-│   ├── app.js                      # Express setup — middleware stack, route mounting
+│   ├── server.js                   # Punto de entrada — conecta DB, arranca el servidor Express
+│   ├── app.js                      # Configuración Express — stack de middlewares, montaje de rutas
 │   │
 │   ├── config/
-│   │   ├── env.js                  # Validates required env vars, exports frozen config object
-│   │   ├── database.js             # Mongoose connection with reconnect event handlers
-│   │   └── constants.js            # Domain enums: ROLES, COURSE_STATUS, BOOKING_STATUS…
+│   │   ├── env.js                  # Valida variables de entorno requeridas, exporta objeto congelado
+│   │   ├── database.js             # Conexión Mongoose con manejadores de eventos de ciclo de vida
+│   │   └── constants.js            # Enums de dominio: ROLES, COURSE_STATUS, BOOKING_STATUS…
 │   │
 │   ├── middlewares/
-│   │   ├── validate.js             # Higher-order fn: validate(schema) → [...chains, errorCollector]
-│   │   ├── verifyToken.js          # JWT verification → populates req.user
-│   │   ├── requireRole.js          # Role-based access control guard
-│   │   ├── requireActiveUser.js    # DB check: user.isActive must be true
-│   │   ├── errorHandler.js         # Central error serializer (ApiError, CastError, duplicate key)
-│   │   ├── notFound.js             # 404 handler for unmatched routes
-│   │   └── rateLimiter.js          # express-rate-limit — loginLimiter for auth endpoint
+│   │   ├── validate.js             # validate(schema) → [...chains, errorCollector]
+│   │   ├── verifyToken.js          # Verificación JWT → popula req.user
+│   │   ├── requireRole.js          # Guardia de control de acceso basado en roles
+│   │   ├── requireActiveUser.js    # Consulta real a DB: user.isActive debe ser true
+│   │   ├── errorHandler.js         # Serializador central de errores (ApiError, CastError, clave duplicada)
+│   │   ├── notFound.js             # Manejador 404 para rutas no coincidentes
+│   │   └── rateLimiter.js          # express-rate-limit — loginLimiter para el endpoint de autenticación
 │   │
-│   ├── models/                     # Mongoose schemas and indexes
+│   ├── models/                     # Schemas Mongoose e índices
 │   │   ├── user.model.js
 │   │   ├── course.model.js
 │   │   ├── unit.model.js
@@ -156,37 +156,37 @@ backend/
 │   │   └── classBooking.model.js
 │   │
 │   ├── repositories/
-│   │   ├── base.repository.js      # Generic CRUD — extended by all domain repositories
-│   │   └── [domain].repository.js  # One file per model; domain-specific queries only
+│   │   ├── base.repository.js      # CRUD genérico — extendido por todos los repositories de dominio
+│   │   └── [dominio].repository.js # Un fichero por modelo; solo queries específicas del dominio
 │   │
-│   ├── modules/                    # Feature modules — one directory per domain
-│   │   ├── auth/                   # Login, logout, /me, change-password
-│   │   ├── users/                  # User CRUD + activate/deactivate
-│   │   ├── courses/                # Course catalog management and lifecycle
-│   │   ├── units/                  # Unit management (nested under courses)
-│   │   ├── lessons/                # Lesson content (nested under units)
-│   │   ├── enrollments/            # Student enrollment lifecycle
-│   │   ├── progress/               # LessonProgress tracking and snapshots
-│   │   ├── assessments/            # Assessment definition and attempt submission
-│   │   ├── bookings/               # 1-on-1 class booking (Phase 4)
-│   │   └── availability/           # Teacher availability slot management (Phase 5)
-│   │       └── [module]/
+│   ├── modules/                    # Módulos de funcionalidad — un directorio por dominio
+│   │   ├── auth/                   # Login, logout, /me, cambio de contraseña
+│   │   ├── users/                  # CRUD de usuarios + activar/desactivar
+│   │   ├── courses/                # Gestión del catálogo de cursos y su ciclo de vida
+│   │   ├── units/                  # Gestión de Units (anidado bajo courses)
+│   │   ├── lessons/                # Contenido de Lessons (anidado bajo units)
+│   │   ├── enrollments/            # Ciclo de vida de la Enrollment
+│   │   ├── progress/               # Seguimiento de LessonProgress y snapshots de progreso
+│   │   ├── assessments/            # Definición de Assessments y envío de intentos
+│   │   ├── bookings/               # Reserva de clases particulares (Fase 4)
+│   │   └── availability/           # Gestión de franjas de disponibilidad del Teacher (Fase 5)
+│   │       └── [modulo]/
 │   │           ├── *.controller.js
 │   │           ├── *.service.js
 │   │           ├── *.validator.js
 │   │           └── *.routes.js
 │   │
 │   ├── utils/
-│   │   ├── ApiError.js             # Typed error hierarchy (NotFoundError, ConflictError…)
-│   │   ├── asyncHandler.js         # Wraps async controllers — routes errors to next()
-│   │   ├── pagination.js           # build() and toMongoOptions() helpers
-│   │   ├── logger.js               # Coloured console logger with log levels
-│   │   ├── progressCalculator.js   # Stateless utility — aggregates lesson + assessment data
-│   │   └── slotExpander.js         # Expands teacher availability rules into time slots
+│   │   ├── ApiError.js             # Jerarquía de errores tipados (NotFoundError, ConflictError…)
+│   │   ├── asyncHandler.js         # Envuelve controllers async — redirige rechazos a next()
+│   │   ├── pagination.js           # Helpers build() y toMongoOptions()
+│   │   ├── logger.js               # Logger de consola con niveles y colores
+│   │   ├── progressCalculator.js   # Utilidad sin estado — agrega datos de Lesson y Assessment
+│   │   └── slotExpander.js         # Expande reglas de disponibilidad del Teacher en franjas reservables
 │   │
 │   └── seeds/
-│       ├── index.js                # Seed runner — clears collections, runs phases
-│       └── phase1.seed.js          # Initial dataset: users, courses, units, lessons, enrollments
+│       ├── index.js                # Runner de seeds — limpia colecciones y ejecuta fases
+│       └── phase1.seed.js          # Dataset inicial: usuarios, cursos, unidades, lecciones, matrículas
 │
 ├── tests/
 │   ├── validate.test.js
@@ -195,332 +195,333 @@ backend/
 │
 ├── .env.example
 ├── .gitignore
+├── LICENSE
 └── package.json
 ```
 
 ---
 
-## Modules
+## Módulos
 
-| Module | Base path | Responsibility |
-|--------|-----------|----------------|
-| **Auth** | `/api/auth` | Login, token refresh, password change |
-| **Users** | `/api/users` | User CRUD, activation / deactivation |
-| **Courses** | `/api/courses` | Course catalog management and lifecycle |
-| **Units** | `/api/courses/:courseId/units` | Unit management within a course |
-| **Lessons** | `/api/courses/:courseId/units/:unitId/lessons` | Lesson content and ordering |
-| **Progress** | `/api/progress` | Lesson completion tracking per student |
-| **Enrollments** | `/api/enrollments` | Student enrollment lifecycle |
-| **Assessments** | `/api/courses/:courseId/units/:unitId/assessment` | Assessment definition and submission |
-| **Bookings** | `/api/bookings` | 1-on-1 class booking *(Phase 4)* |
-| **Availability** | `/api/teachers` | Teacher availability slot management *(Phase 5)* |
+| Módulo | Ruta base | Responsabilidad |
+|--------|-----------|-----------------|
+| **Auth** | `/api/auth` | Login, logout, perfil propio, cambio de contraseña |
+| **Users** | `/api/users` | CRUD de Users, activación y desactivación |
+| **Courses** | `/api/courses` | Gestión del catálogo de cursos y su ciclo de vida |
+| **Units** | `/api/courses/:courseId/units` | Gestión de Units dentro de un Course |
+| **Lessons** | `/api/courses/:courseId/units/:unitId/lessons` | Contenido y ordenación de Lessons |
+| **Progress** | `/api/progress` | Seguimiento de LessonProgress por Student |
+| **Enrollments** | `/api/enrollments` | Ciclo de vida de la Enrollment |
+| **Assessments** | `/api/courses/:courseId/units/:unitId/assessment` | Definición y envío de intentos del Assessment |
+| **Bookings** | `/api/bookings` | Reserva de clases particulares *(Fase 4)* |
+| **Availability** | `/api/teachers` | Gestión de franjas de disponibilidad del Teacher *(Fase 5)* |
 
 ### Auth
 
-| Method | Endpoint | Description | Access |
+| Método | Endpoint | Descripción | Acceso |
 |--------|----------|-------------|--------|
-| `POST` | `/api/auth/login` | Authenticate and receive JWT | Public |
-| `POST` | `/api/auth/logout` | Invalidate session (client-side token discard) | Authenticated |
-| `GET` | `/api/auth/me` | Get own profile from live DB | Authenticated |
-| `PATCH` | `/api/auth/change-password` | Change own password | Authenticated |
+| `POST` | `/api/auth/login` | Autenticación y obtención del JWT | Público |
+| `POST` | `/api/auth/logout` | Cierre de sesión (descarte del token en el cliente) | Autenticado |
+| `GET` | `/api/auth/me` | Perfil propio desde DB en tiempo real | Autenticado |
+| `PATCH` | `/api/auth/change-password` | Cambio de contraseña propia | Autenticado |
 
 ### Users
 
-| Method | Endpoint | Description | Roles |
+| Método | Endpoint | Descripción | Roles |
 |--------|----------|-------------|-------|
-| `GET` | `/api/users` | List users (paginated, filterable) | Admin, Teacher |
-| `GET` | `/api/users/:id` | Get user detail | Admin, Teacher |
-| `POST` | `/api/users` | Create user | Admin |
-| `PATCH` | `/api/users/:id` | Update user profile | Admin |
-| `PATCH` | `/api/users/:id/activate` | Activate user | Admin |
-| `PATCH` | `/api/users/:id/deactivate` | Deactivate user | Admin |
+| `GET` | `/api/users` | Listar Users (paginado, filtrable) | Admin, Teacher |
+| `GET` | `/api/users/:id` | Detalle de un User | Admin, Teacher |
+| `POST` | `/api/users` | Crear User | Admin |
+| `PATCH` | `/api/users/:id` | Actualizar perfil | Admin |
+| `PATCH` | `/api/users/:id/activate` | Activar User | Admin |
+| `PATCH` | `/api/users/:id/deactivate` | Desactivar User | Admin |
 
 ### Courses
 
-| Method | Endpoint | Description | Roles |
+| Método | Endpoint | Descripción | Roles |
 |--------|----------|-------------|-------|
-| `GET` | `/api/courses` | List courses | Admin, Teacher, Student |
-| `GET` | `/api/courses/:id` | Get course detail | Admin, Teacher, Student |
-| `POST` | `/api/courses` | Create course | Admin |
-| `PATCH` | `/api/courses/:id` | Update course metadata | Admin |
-| `PATCH` | `/api/courses/:id/publish` | Publish course (draft → published) | Admin |
-| `PATCH` | `/api/courses/:id/archive` | Archive course | Admin |
+| `GET` | `/api/courses` | Listar Courses | Admin, Teacher, Student |
+| `GET` | `/api/courses/:id` | Detalle de un Course | Admin, Teacher, Student |
+| `POST` | `/api/courses` | Crear Course | Admin |
+| `PATCH` | `/api/courses/:id` | Actualizar metadatos del Course | Admin |
+| `PATCH` | `/api/courses/:id/publish` | Publicar Course (draft → published) | Admin |
+| `PATCH` | `/api/courses/:id/archive` | Archivar Course | Admin |
 
 ### Units
 
-| Method | Endpoint | Description | Roles |
+| Método | Endpoint | Descripción | Roles |
 |--------|----------|-------------|-------|
-| `GET` | `…/units` | List units for a course | Admin, Teacher, Student |
-| `GET` | `…/units/:id` | Get unit detail | Admin, Teacher, Student |
-| `POST` | `…/units` | Create unit | Admin |
-| `PATCH` | `…/units/reorder` | Reorder units within course | Admin |
-| `PATCH` | `…/units/:id` | Update unit | Admin |
-| `DELETE` | `…/units/:id` | Remove unit | Admin |
+| `GET` | `…/units` | Listar Units de un Course | Admin, Teacher, Student |
+| `GET` | `…/units/:id` | Detalle de una Unit | Admin, Teacher, Student |
+| `POST` | `…/units` | Crear Unit | Admin |
+| `PATCH` | `…/units/reorder` | Reordenar Units dentro del Course | Admin |
+| `PATCH` | `…/units/:id` | Actualizar Unit | Admin |
+| `DELETE` | `…/units/:id` | Eliminar Unit | Admin |
 
 ### Lessons
 
-| Method | Endpoint | Description | Roles |
+| Método | Endpoint | Descripción | Roles |
 |--------|----------|-------------|-------|
-| `GET` | `…/lessons` | List lessons for a unit | Admin, Teacher, Student |
-| `GET` | `…/lessons/:id` | Get lesson content | Admin, Teacher, Student |
-| `POST` | `…/lessons` | Create lesson | Admin |
-| `PATCH` | `…/lessons/reorder` | Reorder lessons within unit | Admin |
-| `PATCH` | `…/lessons/:id` | Update lesson | Admin |
-| `DELETE` | `…/lessons/:id` | Remove lesson | Admin |
+| `GET` | `…/lessons` | Listar Lessons de una Unit | Admin, Teacher, Student |
+| `GET` | `…/lessons/:id` | Detalle de una Lesson | Admin, Teacher, Student |
+| `POST` | `…/lessons` | Crear Lesson | Admin |
+| `PATCH` | `…/lessons/reorder` | Reordenar Lessons dentro de la Unit | Admin |
+| `PATCH` | `…/lessons/:id` | Actualizar Lesson | Admin |
+| `DELETE` | `…/lessons/:id` | Eliminar Lesson | Admin |
 
 ### Progress
 
-| Method | Endpoint | Description | Roles |
+| Método | Endpoint | Descripción | Roles |
 |--------|----------|-------------|-------|
-| `PATCH` | `/api/progress/lessons/:lessonId/complete` | Mark lesson as completed | Student |
-| `GET` | `/api/progress/courses/:courseId` | Own progress in a course | Student |
-| `GET` | `/api/progress/overview` | Own overall progress across all courses | Student |
-| `GET` | `/api/progress/students/:studentId/courses/:courseId` | Student progress (external view) | Admin, Teacher |
-| `GET` | `/api/progress/students/:studentId` | Student overview (external view) | Admin, Teacher |
+| `PATCH` | `/api/progress/lessons/:lessonId/complete` | Marcar Lesson como completada | Student |
+| `GET` | `/api/progress/courses/:courseId` | Progreso propio en un Course | Student |
+| `GET` | `/api/progress/overview` | Resumen de progreso en todos los cursos activos | Student |
+| `GET` | `/api/progress/students/:studentId/courses/:courseId` | Progreso de un Student (vista externa) | Admin, Teacher |
+| `GET` | `/api/progress/students/:studentId` | Resumen de progreso de un Student | Admin, Teacher |
 
 ### Enrollments
 
-| Method | Endpoint | Description | Roles |
+| Método | Endpoint | Descripción | Roles |
 |--------|----------|-------------|-------|
-| `GET` | `/api/enrollments` | List enrollments | Admin, Teacher, Student (own) |
-| `GET` | `/api/enrollments/:id` | Get enrollment detail | Admin, Teacher, Student (own) |
-| `POST` | `/api/enrollments` | Enroll a student in a course | Admin |
-| `PATCH` | `/api/enrollments/:id/suspend` | Suspend enrollment | Admin |
-| `PATCH` | `/api/enrollments/:id/activate` | Reactivate enrollment | Admin |
+| `GET` | `/api/enrollments` | Listar Enrollments | Admin, Teacher, Student (propias) |
+| `GET` | `/api/enrollments/:id` | Detalle de una Enrollment | Admin, Teacher, Student (propia) |
+| `POST` | `/api/enrollments` | Matricular un Student en un Course | Admin |
+| `PATCH` | `/api/enrollments/:id/suspend` | Suspender Enrollment | Admin |
+| `PATCH` | `/api/enrollments/:id/activate` | Reactivar Enrollment | Admin |
 
 ### Assessments
 
-| Method | Endpoint | Description | Roles |
+| Método | Endpoint | Descripción | Roles |
 |--------|----------|-------------|-------|
-| `GET` | `…/assessment` | Get unit assessment | Admin, Teacher, Student* |
-| `POST` | `…/assessment` | Create assessment for a unit | Admin |
-| `PATCH` | `…/assessment` | Update assessment definition | Admin |
-| `DELETE` | `…/assessment` | Delete assessment (draft courses only) | Admin |
-| `POST` | `…/assessment/attempts` | Submit an attempt | Student |
-| `GET` | `…/assessment/attempts` | List all attempts | Admin, Teacher, Student (own) |
+| `GET` | `…/assessment` | Obtener el Assessment de una Unit | Admin, Teacher, Student* |
+| `POST` | `…/assessment` | Crear Assessment para una Unit | Admin |
+| `PATCH` | `…/assessment` | Actualizar definición del Assessment | Admin |
+| `DELETE` | `…/assessment` | Eliminar Assessment (solo en Courses en draft) | Admin |
+| `POST` | `…/assessment/attempts` | Enviar un intento | Student |
+| `GET` | `…/assessment/attempts` | Listar todos los intentos | Admin, Teacher, Student (propios) |
 
-*Student access requires all unit lessons to be completed first.
+*El acceso del Student requiere haber completado todas las Lessons de la Unit.
 
 ---
 
-## Business Rules
+## Reglas de negocio
 
 ### Enrollment
 
-- A student can only be enrolled in a `published` course; `draft` and `archived` courses reject enrollment.
-- A student must be `isActive: true` at the time of enrollment.
-- Duplicate enrollment (same student + course pair) is rejected at both the service and database layer (unique index).
-- On enrollment creation, all `LessonProgress` records for the course are initialised in bulk with `status: not_started`.
-- `status: completed` is **set by the system only** — it cannot be forced via the API.
-- A `completed` enrollment is immutable; no further status changes are accepted.
+- Un Student solo puede matricularse en un Course con estado `published`; los estados `draft` y `archived` rechazan la matriculación.
+- El Student debe tener `isActive: true` en el momento de la matrícula.
+- La duplicidad (mismo Student + Course) se rechaza en el service y en la base de datos mediante índice único.
+- Al crear la Enrollment, el sistema inicializa en bloque todos los registros `LessonProgress` del Course con `status: not_started`.
+- El estado `completed` lo asigna el sistema automáticamente — no existe endpoint para forzarlo.
+- Una Enrollment con estado `completed` es inmutable; no se acepta ningún cambio posterior.
 
 ### LessonProgress
 
-- Records are created at enrollment time and never deleted — completion is irreversible.
-- `completeLesson` is **idempotent**: calling it on an already-completed lesson returns the current state without side effects.
-- Completing a lesson requires an `active` enrollment in the course at the time of the call.
+- Los registros se crean en el momento de la matrícula y nunca se eliminan — la finalización es irreversible.
+- `completeLesson` es **idempotente**: llamarlo sobre una Lesson ya completada devuelve el estado actual sin efectos secundarios.
+- Completar una Lesson requiere tener una Enrollment activa en el Course en el momento de la llamada.
 
-### Sequential Unlock
+### Desbloqueo secuencial
 
-- Controlled per unit by `unit.sequentialUnlock` (boolean flag).
-- When enabled, a student cannot complete lesson `n` until lesson `n − 1` is `completed`.
-- Unit access follows the same pattern: a unit is locked until the previous unit's assessment is passed (when one exists).
+- Controlado por Unit mediante el flag `unit.sequentialUnlock` (booleano).
+- Cuando está activo, un Student no puede completar la Lesson `n` hasta que la Lesson `n − 1` esté `completed`.
+- El acceso a cada Unit sigue el mismo patrón: una Unit está bloqueada hasta que se supera el Assessment de la Unit anterior (si existe).
 
 ### Assessments
 
-- Each unit may have at most one assessment; creating a second one raises a `ConflictError`.
-- A student can only access or submit an assessment **after completing all lessons in the unit**.
-- `correctAnswer` is excluded from all responses to Teachers and Students — only Admin receives it.
-- An assessment can only be deleted while its course is in `draft` status; deleting it cascades to all related `AssessmentAttempt` records.
+- Cada Unit puede tener como máximo un Assessment; crear un segundo lanza `ConflictError`.
+- Un Student solo puede acceder o enviar un Assessment **tras completar todas las Lessons de la Unit**.
+- `correctAnswer` nunca se devuelve a Teachers ni Students — solo el Admin lo recibe.
+- Un Assessment solo puede eliminarse mientras su Course esté en estado `draft`; la eliminación en cascada afecta a todos sus `AssessmentAttempt`.
 
-### Assessment Attempts
+### AssessmentAttempts
 
-- Submission requires: active enrollment + all unit lessons completed + attempts remaining.
-- A student who has already passed (`passed: true`) cannot submit further attempts.
-- Exceeding `assessment.maxAttempts` is rejected before any scoring occurs.
-- `score = floor((correct answers / total questions) × 100)`.
+- El envío requiere: Enrollment activa + todas las Lessons de la Unit completadas + intentos restantes disponibles.
+- Un Student que ya ha aprobado (`passed: true`) no puede enviar más intentos.
+- Superar `assessment.maxAttempts` se rechaza antes de cualquier corrección.
+- `score = floor((respuestas correctas / total preguntas) × 100)`.
 - `passed = score ≥ assessment.passingScore`.
-- Every attempt is persisted as an immutable snapshot; the source assessment can evolve without corrupting historical scores.
+- Cada intento se persiste como snapshot inmutable; el Assessment fuente puede evolucionar sin corromper el historial.
 
-### Course Completion
+### Finalización del Course
 
-- Triggered automatically when `overallProgress` reaches `100 %` after a lesson is marked complete.
-- Calls `EnrollmentService.markCompleted()` internally — there is no endpoint to force this state.
+- Se activa automáticamente cuando `overallProgress` alcanza el `100 %` al marcar una Lesson como completada.
+- El sistema llama internamente a `EnrollmentService.markCompleted()` — no existe endpoint para forzar este estado.
 
-### Authorization Rules
+### Reglas de autorización
 
-| Action | Admin | Teacher | Student |
+| Acción | Admin | Teacher | Student |
 |--------|-------|---------|---------|
-| Manage users / courses / units / lessons | ✅ | ✗ | ✗ |
-| View any enrollment or progress | ✅ | Own students only | Own data only |
-| Submit lesson completion / assessment | ✅ | ✗ | ✅ (own) |
-| See `correctAnswer` | ✅ | ✗ | ✗ |
-| Delete assessments | ✅ (draft only) | ✗ | ✗ |
-| Force enrollment `completed` | ✗ | ✗ | ✗ (system only) |
+| Gestionar Users, Courses, Units, Lessons | ✅ | ✗ | ✗ |
+| Ver cualquier Enrollment o progreso | ✅ | Solo sus Students | Solo datos propios |
+| Marcar Lessons como completadas / enviar Assessment | ✅ | ✗ | ✅ (propios) |
+| Ver `correctAnswer` | ✅ | ✗ | ✗ |
+| Eliminar Assessments | ✅ (solo en draft) | ✗ | ✗ |
+| Forzar Enrollment a `completed` | ✗ | ✗ | ✗ (solo el sistema) |
 
 ---
 
-## Security & Authorization
+## Seguridad y autorización
 
-**Authentication**
+**Autenticación**
 
-All protected routes require a `Bearer` JWT in the `Authorization` header. `verifyToken` validates the signature, extracts `{ userId, role }`, and populates `req.user`. Missing or malformed tokens return `401 TOKEN_MISSING`. Expired or tampered tokens return `401 INVALID_TOKEN`.
+Todas las rutas protegidas requieren un JWT de tipo `Bearer` en la cabecera `Authorization`. El middleware `verifyToken` valida la firma, extrae `{ userId, role }` y popula `req.user`. Los tokens ausentes o mal formados devuelven `401 TOKEN_MISSING`. Los tokens expirados o manipulados devuelven `401 INVALID_TOKEN`.
 
-**Role-based access control**
+**Control de acceso basado en roles**
 
-`requireRole(...roles)` runs after `verifyToken` and rejects any request whose `req.user.role` is not in the allowed list (`403 INSUFFICIENT_ROLE`).
+`requireRole(...roles)` se ejecuta tras `verifyToken` y rechaza cualquier petición cuyo `req.user.role` no esté en la lista de roles permitidos (`403 INSUFFICIENT_ROLE`). Los roles disponibles son `admin`, `teacher` y `student`.
 
-**Active-user enforcement**
+**Verificación de cuenta activa**
 
-Write endpoints carry `requireActiveUser`, which performs a live DB lookup and rejects tokens belonging to deactivated accounts (`403 ACCOUNT_INACTIVE`). Read endpoints intentionally skip this check.
+Los endpoints de escritura incluyen `requireActiveUser`, que realiza una consulta real a la base de datos y rechaza tokens pertenecientes a cuentas desactivadas (`403 ACCOUNT_INACTIVE`). Los endpoints de lectura omiten esta comprobación intencionadamente.
 
-**Password security**
+**Seguridad de contraseñas**
 
-- Passwords are hashed with `bcryptjs` (10 rounds) before persistence.
-- Input is capped at 72 characters in the validator, enforcing bcrypt's silent truncation limit.
-- `passwordHash` is excluded from all query results via `select: false` on the Mongoose field and a `toJSON.transform` that strips it on serialization (double defence).
-- `updateUserSchema` blocks `password` and `passwordHash` from the PATCH body; password changes go through the dedicated `PATCH /auth/change-password` endpoint.
+- Las contraseñas se hashean con `bcryptjs` (10 rondas) antes de persistirse.
+- La entrada está limitada a 72 caracteres en el validator, respetando el límite de truncación silenciosa de bcrypt.
+- `passwordHash` queda excluido de todos los resultados de queries mediante `select: false` en el campo Mongoose y un `toJSON.transform` que lo elimina en la serialización (doble defensa).
+- `updateUserSchema` bloquea `password` y `passwordHash` en el body del PATCH; los cambios de contraseña pasan por el endpoint dedicado `PATCH /api/auth/change-password`.
 
-**Sensitive field access**
+**Acceso a campos sensibles**
 
-- `correctAnswer` is never returned to Teachers or Students. Repository methods accept an explicit `includeCorrectAnswers` flag set to `true` only inside `submitAttempt`.
+- `correctAnswer` nunca se devuelve a Teachers ni Students. Los métodos del repository aceptan un flag explícito `includeCorrectAnswers`, que solo se activa dentro de `submitAttempt`.
 
-**Other protections**
+**Otras protecciones**
 
-- Whitelist updates in every repository — update objects are built field-by-field, preventing mass-assignment and NoSQL injection.
-- CORS is restricted to the `CLIENT_URL` environment variable.
-- Rate limiting (`loginLimiter`) is applied to `POST /api/auth/login` — 5 requests per 15 minutes per IP.
+- Lista blanca de actualizaciones en todos los repositories — los objetos de actualización se construyen campo a campo, previniendo mass-assignment e inyección NoSQL.
+- CORS restringido al origen definido en la variable de entorno `CLIENT_URL`.
+- Limitación de peticiones (`loginLimiter`) aplicada a `POST /api/auth/login` — 5 peticiones cada 15 minutos por IP.
 
 ---
 
-## Getting Started
+## Primeros pasos
 
-### Prerequisites
+### Requisitos previos
 
 - Node.js ≥ 18
-- MongoDB ≥ 6 running locally or a connection string (Atlas, etc.)
+- MongoDB ≥ 6 en local o una cadena de conexión (Atlas, etc.)
 
-### Installation
+### Instalación
 
 ```bash
-git clone https://github.com/<your-username>/elevate-your-english-backend.git
+git clone https://github.com/<tu-usuario>/elevate-your-english-backend.git
 cd elevate-your-english-backend
 npm install
 ```
 
-### Environment variables
+### Variables de entorno
 
-Copy the example file and fill in your values:
+Copia el fichero de ejemplo y completa los valores:
 
 ```bash
 cp .env.example .env
 ```
 
-| Variable | Example | Description |
+| Variable | Ejemplo | Descripción |
 |----------|---------|-------------|
-| `PORT` | `4000` | HTTP server port |
+| `PORT` | `4000` | Puerto del servidor HTTP |
 | `NODE_ENV` | `development` | `development` \| `production` \| `test` |
-| `MONGODB_URI` | `mongodb://localhost:27017/elevate_campus` | MongoDB connection string |
-| `JWT_SECRET` | `your-secret-min-32-chars` | Signing key for all JWT tokens |
-| `JWT_TTL_ADMIN` | `8h` | Token expiry for admin users |
-| `JWT_TTL_TEACHER` | `24h` | Token expiry for teachers |
-| `JWT_TTL_STUDENT` | `7d` | Token expiry for students |
-| `CLIENT_URL` | `http://localhost:3000` | CORS allowed origin |
+| `MONGODB_URI` | `mongodb://localhost:27017/elevate_campus` | Cadena de conexión a MongoDB |
+| `JWT_SECRET` | `tu-secreto-minimo-32-caracteres` | Clave de firma para todos los JWT |
+| `JWT_TTL_ADMIN` | `8h` | Expiración del token para Admin |
+| `JWT_TTL_TEACHER` | `24h` | Expiración del token para Teacher |
+| `JWT_TTL_STUDENT` | `7d` | Expiración del token para Student |
+| `CLIENT_URL` | `http://localhost:3000` | Origen permitido por CORS |
 
-The server exits at startup if any required variable is missing.
+El servidor termina al arrancar si falta alguna variable requerida.
 
-### Run
+### Ejecución
 
 ```bash
-npm run dev     # nodemon — restarts on file changes
-npm start       # standard node
+npm run dev     # nodemon — reinicia con cada cambio en ficheros
+npm start       # node estándar
 ```
 
 ---
 
-## Seed Data
+## Datos de prueba
 
-Populates the database with a representative initial dataset for local development and manual testing.
+Puebla la base de datos con un dataset inicial representativo para desarrollo local y pruebas manuales.
 
-> **Warning:** the seed **drops and recreates** the following collections before inserting:
+> **Aviso:** el seed **elimina y recrea** las siguientes colecciones antes de insertar:
 > `users`, `courses`, `units`, `lessons`, `assessments`, `enrollments`, `lessonprogresses`, `assessmentattempts`.
 
 ```bash
-# NODE_ENV must be "development" — the seed refuses to run otherwise
+# NODE_ENV debe ser "development" — el seed rechaza ejecutarse en otro entorno
 npm run seed
 ```
 
-The seed connects to MongoDB, clears the listed collections, runs `phase1.seed.js`, then disconnects. Seeded user credentials are printed to the console on completion.
+El seed conecta a MongoDB, limpia las colecciones indicadas, ejecuta `phase1.seed.js` y desconecta. Las credenciales de los usuarios creados se imprimen por consola al finalizar.
 
 ---
 
-## Testing
+## Tests
 
-Tests run against in-memory structures only — no running MongoDB required.
+Los tests operan sobre estructuras en memoria — no se necesita MongoDB en ejecución.
 
 ```bash
-npm test              # single run (jest --runInBand)
-npm run test:watch    # interactive watch mode
+npm test              # ejecución única (jest --runInBand)
+npm run test:watch    # modo interactivo con vigilancia de cambios
 ```
 
-**Current coverage:**
+**Cobertura actual:**
 
-| Suite | Tests | What is covered |
-|-------|-------|-----------------|
-| `validate.test.js` | 6 | `validate()` middleware — pass-through, error shape, field accumulation |
-| `user.validator.test.js` | 38 | All 4 schemas — required fields, format rules, blocklists, sanitizers |
-| `user.routes.test.js` | 21 | Route count, method+path existence, no shadowing, middleware order, controller references |
-| **Total** | **65** | **0 failures** |
+| Suite | Tests | Qué cubre |
+|-------|-------|-----------|
+| `validate.test.js` | 6 | Middleware `validate()` — paso correcto, forma del error, acumulación de campos |
+| `user.validator.test.js` | 38 | Los 4 schemas — campos requeridos, reglas de formato, listas de bloqueo, sanitizadores |
+| `user.routes.test.js` | 21 | Número de rutas, existencia método+path, ausencia de shadowing, orden de middlewares, referencias a controllers |
+| **Total** | **65** | **0 fallos** |
 
-All environment variables required by the app are set inline at the top of each test file — no `.env` file needed to run tests.
-
----
-
-## Known Limitations
-
-**Not yet implemented**
-
-- **Bookings** (`/api/bookings`) — router is registered but empty. No routes, no logic.
-- **Availability** (`/api/teachers`) — same: registered but empty.
-
-**Testing gaps**
-
-- Tests exist only for the Users module (65 tests across 3 suites).
-- Auth, Courses, Units, Lessons, Enrollments, Progress, and Assessments have **zero automated tests**.
-- No integration tests run against a real MongoDB instance — Mongoose index constraints and model-level validation are not exercised in the test suite.
-
-**Other**
-
-- No file upload — `avatarUrl` stores an externally hosted URL string only.
-- `POST /api/auth/logout` is stateless: it acknowledges the request but does not blacklist the token. Token invalidation is the client's responsibility.
-- Seed data covers Phase 1 entities only; booking and availability records are not seeded.
+Las variables de entorno requeridas por la aplicación se definen al inicio de cada fichero de test — no se necesita `.env` para ejecutar los tests.
 
 ---
 
-## Roadmap
+## Limitaciones conocidas
 
-| Phase | Scope | Status |
-|-------|-------|--------|
-| 0 | Infrastructure — Express, config, middlewares, error handling, base repository | ✅ Complete |
-| 1 | Users — full CRUD, activate/deactivate, validators, routes, tests | ✅ Complete |
-| 2 | Auth, Courses, Units, Lessons, Enrollments, Progress, Assessments — service + controller + validator + routes | ✅ Implemented |
-| 3 | Test suites for all Phase 2 modules | 🔲 Pending |
-| 4 | Bookings — 1-on-1 class booking lifecycle | 🔲 Pending |
-| 5 | Availability — teacher slot templates and slot expansion | 🔲 Pending |
-| 6 | Integration tests, seed expansion, deployment configuration | 🔲 Pending |
+**No implementado aún**
 
----
+- **Bookings** (`/api/bookings`) — el router está registrado en `app.js` pero vacío. Sin rutas ni lógica.
+- **Availability** (`/api/teachers`) — ídem: registrado pero vacío.
 
-## Development Process
+**Cobertura de tests**
 
-This project follows a strict **design → review → implement → validate** cycle. Each module is fully designed and reviewed before a single line of implementation is written. No module is considered complete until its tests pass at zero failures.
+- Los tests solo cubren el módulo Users (65 tests en 3 suites).
+- Auth, Courses, Units, Lessons, Enrollments, Progress y Assessments tienen **cero tests automatizados**.
+- No existen tests de integración contra una instancia real de MongoDB; las restricciones de índices Mongoose y la validación a nivel de modelo no se ejercitan en el suite actual.
 
-Layers are implemented in sequence — model → repository → service → controller → validator → routes — so that each layer can be tested in isolation before the next is built on top of it.
+**Otros**
 
-**AI-assisted development**
-
-Architecture decisions, layer contracts, security constraints, and validator rules were developed with the support of an AI assistant (Claude), used as a technical reviewer and sounding board. Every design choice was reasoned through explicitly before being committed to code.
+- Sin subida de ficheros — `avatarUrl` almacena únicamente una URL de imagen alojada externamente.
+- `POST /api/auth/logout` es sin estado: confirma la petición pero no invalida el token en servidor. La eliminación del token es responsabilidad del cliente.
+- Los datos del seed cubren solo las entidades de la Fase 1; los registros de Booking y Availability no están incluidos.
 
 ---
 
-*Built with Node.js · Express · MongoDB · Mongoose*
+## Hoja de ruta
+
+| Fase | Alcance | Estado |
+|------|---------|--------|
+| 0 | Infraestructura — Express, config, middlewares, gestión de errores, base repository | ✅ Completa |
+| 1 | Users — CRUD completo, activar/desactivar, validators, routes, tests | ✅ Completa |
+| 2 | Auth, Courses, Units, Lessons, Enrollments, Progress, Assessments — service + controller + validator + routes | ✅ Implementada |
+| 3 | Suites de tests para todos los módulos de la Fase 2 | 🔲 Pendiente |
+| 4 | Bookings — ciclo de vida de la reserva de clases particulares | 🔲 Pendiente |
+| 5 | Availability — plantillas de disponibilidad del Teacher y expansión de franjas | 🔲 Pendiente |
+| 6 | Tests de integración, ampliación del seed, configuración de despliegue | 🔲 Pendiente |
+
+---
+
+## Proceso de desarrollo
+
+Este proyecto sigue un ciclo estricto de **diseño → revisión → implementación → validación**. Cada módulo se diseña y revisa en su totalidad antes de escribir una sola línea de implementación. Ningún módulo se considera cerrado hasta que sus tests pasan con cero fallos.
+
+Las capas se implementan en secuencia — model → repository → service → controller → validator → routes — de forma que cada capa puede testarse de forma aislada antes de construir la siguiente sobre ella.
+
+**Desarrollo asistido por IA**
+
+Las decisiones de arquitectura, los contratos entre capas, las restricciones de seguridad y las reglas de validación se desarrollaron con el apoyo de un asistente de inteligencia artificial (Claude), utilizado como revisor técnico y interlocutor de diseño. Cada decisión se razonó de forma explícita antes de trasladarse al código.
+
+---
+
+*Desarrollado con Node.js · Express · MongoDB · Mongoose*

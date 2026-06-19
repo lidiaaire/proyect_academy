@@ -1,0 +1,230 @@
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  max-width: 720px;
+}
+
+.header {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.title {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: #1a1a1a;
+  margin: 0;
+}
+
+.meta {
+  display: flex;
+  gap: 1.25rem;
+  font-size: 0.85rem;
+  color: #6b7280;
+}
+
+.metaItem strong {
+  color: #374151;
+}
+
+.statusText {
+  color: #6b7280;
+  font-size: 0.95rem;
+}
+
+.questionCard {
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 1.25rem 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.875rem;
+  margin-bottom: 1rem;
+}
+
+.questionHeader {
+  display: flex;
+  gap: 0.75rem;
+  align-items: flex-start;
+}
+
+.questionNumber {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  background-color: #ede9fe;
+  color: #4f46e5;
+  border-radius: 50%;
+  font-size: 0.8rem;
+  font-weight: 700;
+  flex-shrink: 0;
+  margin-top: 0.1rem;
+}
+
+.questionText {
+  font-size: 0.95rem;
+  font-weight: 500;
+  color: #1a1a1a;
+  line-height: 1.5;
+}
+
+.options {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding-left: 2.5rem;
+}
+
+.optionLabel {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  color: #374151;
+  transition: background-color 0.12s, border-color 0.12s;
+}
+
+.optionLabel:hover {
+  background-color: #f5f3ff;
+  border-color: #c4b5fd;
+}
+
+.optionLabel input[type="radio"] {
+  accent-color: #4f46e5;
+  width: 1rem;
+  height: 1rem;
+  flex-shrink: 0;
+}
+
+.submitBtn {
+  align-self: flex-start;
+  padding: 0.7rem 1.5rem;
+  background-color: #4f46e5;
+  color: #ffffff;
+  border: none;
+  border-radius: 6px;
+  font-size: 1rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.submitBtn:hover:not(:disabled) { background-color: #4338ca; }
+.submitBtn:disabled { background-color: #a5b4fc; cursor: not-allowed; }
+
+.result {
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 1.5rem 2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.resultTitle {
+  font-size: 1.1rem;
+  font-weight: 700;
+  margin: 0;
+}
+
+.resultPass  { color: #065f46; }
+.resultFail  { color: #991b1b; }
+
+.resultMeta {
+  display: flex;
+  gap: 1.5rem;
+  font-size: 0.9rem;
+  color: #374151;
+}
+
+.errorText {
+  color: #dc2626;
+  font-size: 0.9rem;
+}
+
+.maxReachedText {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #92400e;
+  background-color: #fef3c7;
+  border: 1px solid #fcd34d;
+  border-radius: 6px;
+  padding: 0.6rem 1rem;
+  display: inline-block;
+}
+
+.historySection {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-top: 0.5rem;
+}
+
+.historyTitle {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: #1a1a1a;
+  margin: 0;
+}
+
+.historyTable {
+  width: 100%;
+  border-collapse: collapse;
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  overflow: hidden;
+  font-size: 0.875rem;
+}
+
+.historyTable th {
+  text-align: left;
+  padding: 0.65rem 1rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #6b7280;
+  background-color: #f9fafb;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.historyTable td {
+  padding: 0.75rem 1rem;
+  color: #374151;
+  border-bottom: 1px solid #f3f4f6;
+}
+
+.historyTable tr:last-child td {
+  border-bottom: none;
+}
+
+.badgePass {
+  display: inline-block;
+  padding: 0.2rem 0.6rem;
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  background-color: #d1fae5;
+  color: #065f46;
+}
+
+.badgeFail {
+  display: inline-block;
+  padding: 0.2rem 0.6rem;
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  background-color: #fee2e2;
+  color: #991b1b;
+}

@@ -1,0 +1,184 @@
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  max-width: 720px;
+}
+
+.status {
+  color: #6b7280;
+  font-size: 0.95rem;
+}
+
+.card {
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 1.5rem 2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.title {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: #1a1a1a;
+  margin: 0;
+}
+
+.description {
+  font-size: 0.95rem;
+  color: #4b5563;
+  line-height: 1.6;
+  margin: 0;
+}
+
+.meta {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid #f3f4f6;
+}
+
+.metaItem {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.metaLabel {
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #9ca3af;
+}
+
+.metaValue {
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: #374151;
+  text-transform: capitalize;
+}
+
+.badge {
+  display: inline-block;
+  padding: 0.2rem 0.6rem;
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: capitalize;
+  width: fit-content;
+}
+
+.badgeDraft     { background-color: #f3f4f6; color: #6b7280; }
+.badgePublished { background-color: #d1fae5; color: #065f46; }
+.badgeArchived  { background-color: #fef3c7; color: #92400e; }
+
+.sectionTitle {
+  font-size: 1rem;
+  font-weight: 600;
+  color: #374151;
+  margin: 0 0 0.75rem;
+}
+
+.unitList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.unitItem {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 0.75rem 1rem;
+}
+
+.unitOrder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  background-color: #ede9fe;
+  color: #4f46e5;
+  border-radius: 50%;
+  font-size: 0.8rem;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.unitTitle {
+  font-size: 0.9rem;
+  color: #1a1a1a;
+  font-weight: 500;
+}
+
+.unitEmpty {
+  font-size: 0.9rem;
+  color: #9ca3af;
+  padding: 0.5rem 0;
+}
+
+.unitHeader {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.lessonStatus {
+  font-size: 0.8rem;
+  color: #9ca3af;
+  margin: 0.5rem 0 0 2.5rem;
+}
+
+.lessonList {
+  list-style: none;
+  margin: 0.5rem 0 0 2.5rem;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.lessonItem {
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.lessonLink {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.4rem 0.75rem;
+  background-color: #f9fafb;
+  border-radius: 4px;
+  text-decoration: none;
+  width: 100%;
+  transition: background-color 0.12s;
+}
+
+.lessonLink:hover {
+  background-color: #ede9fe;
+}
+
+.lessonOrder {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: #9ca3af;
+  min-width: 1.25rem;
+}
+
+.lessonTitle {
+  font-size: 0.875rem;
+  color: #374151;
+}

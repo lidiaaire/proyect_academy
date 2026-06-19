@@ -1,0 +1,15 @@
+node_modules/
+
+# Environment — ignore all variants, keep only the example
+.env*
+!.env.example
+
+# Logs
+*.log
+server_*.txt
+
+# Test coverage
+coverage/
+
+# OS
+.DS_Store

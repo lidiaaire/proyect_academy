@@ -92,5 +92,6 @@ const assessmentAttemptSchema = new Schema(
 
 assessmentAttemptSchema.index({ assessmentId: 1, studentId: 1 });
 assessmentAttemptSchema.index({ studentId: 1 });
+assessmentAttemptSchema.index({ studentId: 1, submittedAt: 1 });
 
 module.exports = model('AssessmentAttempt', assessmentAttemptSchema);

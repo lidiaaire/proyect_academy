@@ -26,7 +26,7 @@
  *     Proceso:
  *       - Carga Assessment CON correctAnswer (único caso)
  *       - Calcula isCorrect por pregunta
- *       - Calcula score = (correctas / total) * 100
+ *       - Calcula score = (puntos_obtenidos / puntos_totales) * 100  (ponderado por question.points)
  *       - Calcula passed = score >= passingScore
  *       - Persiste AssessmentAttempt inmutable
  *     → AssessmentAttempt creado (sin correctAnswer en respuesta al student)
@@ -156,9 +156,10 @@ const submitAttempt = async (studentId, courseId, unitId, answers) => {
     isCorrect:  answers[i] === q.correctIndex,
   }));
 
-  const correct = evaluated.filter((a) => a.isCorrect).length;
-  const score   = Math.floor((correct / assessment.questions.length) * 100);
-  const passed  = score >= assessment.passingScore;
+  const totalPoints  = assessment.questions.reduce((sum, q) => sum + q.points, 0);
+  const earnedPoints = assessment.questions.reduce((sum, q, i) => sum + (evaluated[i].isCorrect ? q.points : 0), 0);
+  const score        = Math.floor((earnedPoints / totalPoints) * 100);
+  const passed       = score >= assessment.passingScore;
 
   return AssessmentAttemptRepository.create({
     assessmentId:  assessment._id,

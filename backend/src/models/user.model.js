@@ -59,5 +59,6 @@ const userSchema = new Schema(
 
 userSchema.index({ role: 1 });
 userSchema.index({ isActive: 1 });
+userSchema.index({ assignedTeacherId: 1 });
 
 module.exports = model('User', userSchema);

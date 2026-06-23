@@ -11,7 +11,7 @@
  *   ROLES          → { ADMIN, TEACHER, STUDENT }
  *   COURSE_STATUS  → { DRAFT, PUBLISHED, ARCHIVED }
  *   BOOKING_STATUS → { PENDING, CONFIRMED, COMPLETED, CANCELLED }
- *   LESSON_TYPES   → { VIDEO, TEXT }
+ *   LESSON_TYPES   → { VIDEO, TEXT, QUIZ }
  *   CEFR_LEVELS    → { A1, A2, B1, B2, C1, C2 }
  *   ENROLLMENT_STATUS → { ACTIVE, SUSPENDED, COMPLETED }
  *   PROGRESS_STATUS   → { NOT_STARTED, COMPLETED }
@@ -40,7 +40,8 @@ const BOOKING_STATUS = Object.freeze({
 
 const LESSON_TYPES = Object.freeze({
   VIDEO: 'video',
-  TEXT: 'text',
+  TEXT:  'text',
+  QUIZ:  'quiz',
 });
 
 const CEFR_LEVELS = Object.freeze({
@@ -63,6 +64,21 @@ const PROGRESS_STATUS = Object.freeze({
   COMPLETED: 'completed',
 });
 
+const AT_RISK_DAYS = 7;
+const AT_RISK_PROGRESS_THRESHOLD = 50;
+
+const SKILL_RADAR_SOURCE = Object.freeze({
+  PRELIMINARY: 'preliminary',
+  LIVE:        'skill_radar',
+});
+
+const GROWTH_WINDOWS = Object.freeze({
+  DAYS_7:  7,
+  DAYS_30: 30,
+});
+
+const ACTIVITY_FEED_MAX_DAYS = 90;
+
 module.exports = {
   ROLES,
   COURSE_STATUS,
@@ -71,4 +87,9 @@ module.exports = {
   CEFR_LEVELS,
   ENROLLMENT_STATUS,
   PROGRESS_STATUS,
+  AT_RISK_DAYS,
+  AT_RISK_PROGRESS_THRESHOLD,
+  SKILL_RADAR_SOURCE,
+  GROWTH_WINDOWS,
+  ACTIVITY_FEED_MAX_DAYS,
 };

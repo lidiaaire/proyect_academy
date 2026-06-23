@@ -9,7 +9,7 @@
  *   unitId     ObjectId  ref: Unit    requerido
  *   courseId   ObjectId  ref: Course  requerido  (denormalizado para queries eficientes)
  *   title      String    requerido  3-150 chars
- *   type       String    requerido  enum: LESSON_TYPES ('video' | 'text')  inmutable tras creación
+ *   type       String    requerido  enum: LESSON_TYPES ('video' | 'text' | 'quiz')  inmutable tras creación
  *   content    String    condicional  requerido si type='text'  max 50000 chars
  *   videoUrl   String    condicional  requerido si type='video'  URL válida
  *   duration   Number    requerido  minutos  1-300

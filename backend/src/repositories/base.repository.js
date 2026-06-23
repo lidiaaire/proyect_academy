@@ -65,6 +65,12 @@ class BaseRepository {
   async count(filter = {}) {
     return this.model.countDocuments(filter);
   }
+
+  // Ejecuta una aggregation pipeline sobre el modelo.
+  // Uso exclusivo de dashboard.service — los demás services usan métodos del repository.
+  async aggregate(pipeline) {
+    return this.model.aggregate(pipeline);
+  }
 }
 
 module.exports = BaseRepository;

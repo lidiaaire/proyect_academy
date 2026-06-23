@@ -27,11 +27,13 @@
  *     → Recompacta order de lecciones restantes
  */
 
-const LessonRepository         = require('../../repositories/lesson.repository');
-const UnitRepository           = require('../../repositories/unit.repository');
-const CourseRepository         = require('../../repositories/course.repository');
-const EnrollmentRepository     = require('../../repositories/enrollment.repository');
-const LessonProgressRepository = require('../../repositories/lessonProgress.repository');
+const LessonRepository            = require('../../repositories/lesson.repository');
+const UnitRepository              = require('../../repositories/unit.repository');
+const CourseRepository            = require('../../repositories/course.repository');
+const EnrollmentRepository        = require('../../repositories/enrollment.repository');
+const LessonProgressRepository    = require('../../repositories/lessonProgress.repository');
+const AssessmentRepository        = require('../../repositories/assessment.repository');
+const AssessmentAttemptRepository = require('../../repositories/assessmentAttempt.repository');
 const { ROLES, COURSE_STATUS, LESSON_TYPES, PROGRESS_STATUS, ENROLLMENT_STATUS } = require('../../config/constants');
 const {
   NotFoundError,
@@ -69,8 +71,29 @@ const assertStudentEnrolled = async (actorId, courseId) => {
   return enrollment;
 };
 
+// Verifica si la unidad actual está bloqueada porque la unidad anterior no está
+// completamente superada (lecciones 100 % + assessment aprobado si existe).
+const isCurrentUnitLocked = async (studentId, unit) => {
+  if (unit.order === 1) return false;
+  const prevUnit = await UnitRepository.findOne({ courseId: unit.courseId, order: unit.order - 1 });
+  if (!prevUnit) return false;
+
+  const { docs: prevLessons } = await LessonRepository.findByUnitId(prevUnit._id);
+  const progresses = await Promise.all(
+    prevLessons.map((l) => LessonProgressRepository.findByStudentAndLesson(studentId, l._id))
+  );
+  if (!progresses.every((p) => p?.status === PROGRESS_STATUS.COMPLETED)) return true;
+
+  const assessment = await AssessmentRepository.findOne({ unitId: prevUnit._id });
+  if (!assessment) return false;
+
+  const best = await AssessmentAttemptRepository.findBestScore(studentId, assessment._id);
+  return !(best?.passed === true);
+};
+
 const isLessonLocked = async (unit, lesson, actorId) => {
-  if (!unit.sequentialUnlock || lesson.order === 1) return false;
+  if (!unit.sequentialUnlock) return false;
+  if (lesson.order === 1) return isCurrentUnitLocked(actorId, unit);
   const prevLesson = await LessonRepository.findOne({ unitId: lesson.unitId, order: lesson.order - 1 });
   if (!prevLesson) return false;
   const prevProgress = await LessonProgressRepository.findByStudentAndLesson(actorId, prevLesson._id);

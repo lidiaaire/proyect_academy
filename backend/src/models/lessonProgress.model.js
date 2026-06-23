@@ -75,5 +75,7 @@ const lessonProgressSchema = new Schema(
 lessonProgressSchema.index({ enrollmentId: 1, lessonId: 1 }, { unique: true });
 lessonProgressSchema.index({ studentId: 1, courseId: 1 });
 lessonProgressSchema.index({ studentId: 1, lessonId: 1 });
+lessonProgressSchema.index({ studentId: 1, completedAt: 1 });
+lessonProgressSchema.index({ completedAt: 1 });
 
 module.exports = model('LessonProgress', lessonProgressSchema);

@@ -73,12 +73,42 @@ const initializeProgress = async (enrollmentId, courseId, studentId) => {
   await LessonProgressRepository.bulkCreate(docs);
 };
 
+// Verifica que la unidad anterior está completamente superada:
+// todas sus lecciones completadas y, si tiene assessment, aprobado.
+// Si no hay assessment en la unidad anterior, basta con completar las lecciones.
+const assertPrevUnitCompleted = async (studentId, unit) => {
+  if (unit.order === 1) return;
+  const prevUnit = await UnitRepository.findOne({ courseId: unit.courseId, order: unit.order - 1 });
+  if (!prevUnit) return;
+
+  const { docs: prevLessons } = await LessonRepository.findByUnitId(prevUnit._id);
+  const progresses = await Promise.all(
+    prevLessons.map((l) => LessonProgressRepository.findByStudentAndLesson(studentId, l._id))
+  );
+  if (!progresses.every((p) => p?.status === PROGRESS_STATUS.COMPLETED)) {
+    throw new ForbiddenError('LESSON_LOCKED', 'Debes completar todas las lecciones de la unidad anterior primero');
+  }
+
+  const assessment = await AssessmentRepository.findOne({ unitId: prevUnit._id });
+  if (!assessment) return;
+
+  const best = await AssessmentAttemptRepository.findBestScore(studentId, assessment._id);
+  if (!(best?.passed === true)) {
+    throw new ForbiddenError('LESSON_LOCKED', 'Debes aprobar el assessment de la unidad anterior primero');
+  }
+};
+
 const assertLessonUnlocked = async (studentId, progress) => {
   const unit = await UnitRepository.findById(progress.unitId);
   if (!unit || !unit.sequentialUnlock) return;
 
   const lesson = await LessonRepository.findById(progress.lessonId);
-  if (!lesson || lesson.order === 1) return;
+  if (!lesson) return;
+
+  if (lesson.order === 1) {
+    await assertPrevUnitCompleted(studentId, unit);
+    return;
+  }
 
   const prevLesson = await LessonRepository.findOne({ unitId: progress.unitId, order: lesson.order - 1 });
   if (!prevLesson) return;

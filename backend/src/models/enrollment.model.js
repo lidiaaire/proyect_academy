@@ -54,5 +54,6 @@ const enrollmentSchema = new Schema(
 enrollmentSchema.index({ studentId: 1, courseId: 1 }, { unique: true });
 enrollmentSchema.index({ studentId: 1 });
 enrollmentSchema.index({ courseId: 1 });
+enrollmentSchema.index({ enrolledAt: 1 });
 
 module.exports = model('Enrollment', enrollmentSchema);

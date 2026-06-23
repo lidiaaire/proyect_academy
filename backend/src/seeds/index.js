@@ -30,8 +30,23 @@ const run = async () => {
   );
   logger.info('[seed] Colecciones limpiadas');
 
-  await require('./phase1.seed')();
-  logger.info('[seed] phase1 completado');
+  await require('./users.seed')();
+  logger.info('[seed] Usuarios creados (1 admin, 3 teachers, 12 students)');
+
+  await require('./content/a1.seed')();
+  logger.info('[seed] Curso A1 — English Survival Kit creado');
+
+  await require('./content/a2.seed')();
+  logger.info('[seed] Curso A2 — English Every Day creado');
+
+  await require('./content/b1.seed')();
+  logger.info('[seed] Curso B1 — English Unplugged creado');
+
+  await require('./content/b2.seed')();
+  logger.info('[seed] Curso B2 — English in Depth creado');
+
+  // await require('./enrollments.seed')();
+  // logger.info('[seed] Matrículas y progreso creados');
 
   await mongoose.disconnect();
   process.exit(0);

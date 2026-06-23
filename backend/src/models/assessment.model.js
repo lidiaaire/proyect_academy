@@ -12,11 +12,11 @@
  *   maxAttempts   Number    requerido  default: 3  mínimo: 1
  *   passingScore  Number    requerido  0-100  porcentaje mínimo para pasar
  *   questions     Array de Question (embebido)
- *     - _id       ObjectId  auto
- *     - text      String    requerido
- *     - options   String[]  requerido  min 2 opciones
- *     - correctAnswer  String  requerido  select: false  (NUNCA expuesto a Student/Teacher)
- *     - points    Number    requerido  default: 1
+ *     - _id          ObjectId  auto
+ *     - text         String    requerido
+ *     - options      String[]  requerido  min 2 opciones
+ *     - correctIndex Number    requerido  select: false  (NUNCA expuesto a Student/Teacher)
+ *     - points       Number    requerido  default: 1  min: 1  peso de la pregunta en el score total
  *
  * Índices:
  *   { unitId: 1 }  unique  — garantiza 1 assessment por unidad
@@ -44,6 +44,11 @@ const questionSchema = new Schema(
       type:     Number,
       required: true,
       select:   false,
+    },
+    points: {
+      type:    Number,
+      default: 1,
+      min:     1,
     },
   },
   { _id: true }

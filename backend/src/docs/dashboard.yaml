@@ -1,0 +1,1038 @@
+openapi: 3.0.3
+
+info:
+  title: Elevate Your English — Dashboard API
+  version: 1.0.0
+
+tags:
+  - name: Dashboard
+    description: >
+      Datos agregados del dashboard por rol. Montado bajo `/api/dashboard`.
+      Todos los endpoints son solo lectura — nunca modifican documentos.
+      Las respuestas son objetos directos sin envelope adicional
+      (`res.json(result)`).
+
+paths:
+
+  /api/dashboard/student:
+    get:
+      tags: [Dashboard]
+      summary: Dashboard del alumno autenticado
+      description: >
+        Devuelve un dashboard completo calculado en tiempo real para el
+        alumno autenticado, basado en sus matrículas activas.
+
+        Si el alumno no tiene matrículas activas, los campos numéricos
+        valen 0 o null y los arrays están vacíos — el endpoint **nunca
+        lanza error** por ausencia de datos.
+
+        Solo accesible por STUDENT.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Dashboard del alumno.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StudentDashboard"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/WrongRole"
+
+  /api/dashboard/teacher:
+    get:
+      tags: [Dashboard]
+      summary: Dashboard del profesor autenticado
+      description: >
+        Devuelve un dashboard de cohorte para el profesor autenticado,
+        con métricas agregadas de todos sus alumnos asignados
+        (`assignedTeacherId === teacherId`).
+
+        Si el profesor no tiene alumnos asignados, devuelve una estructura
+        vacía sin error.
+
+        Solo accesible por TEACHER.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Dashboard del profesor.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TeacherDashboard"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/WrongRole"
+
+  /api/dashboard/teacher/students/{studentId}:
+    get:
+      tags: [Dashboard]
+      summary: Detalle de un alumno de la cohorte del profesor
+      description: >
+        Devuelve el mismo objeto `StudentDashboard` que `GET
+        /api/dashboard/student`, pero calculado para el alumno indicado
+        por el profesor autenticado.
+
+        **Validación de scope (primera operación):** el alumno debe existir
+        y tener `assignedTeacherId === teacherId` → 403
+        `STUDENT_NOT_IN_COHORT` si no. Si el alumno no existe → 404
+        `STUDENT_NOT_FOUND`.
+
+        **Sin middleware `validate(idParamSchema)`:** no hay
+        express-validator en esta ruta. Un `studentId` con formato
+        no-ObjectId produce CastError en `UserRepository.findById` →
+        400 `INVALID_ID` (gestionado por el `errorHandler` central).
+
+        Solo accesible por TEACHER.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/studentId"
+      responses:
+        "200":
+          description: Dashboard del alumno de la cohorte del profesor.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StudentDashboard"
+        "400":
+          description: "`studentId` no es un ObjectId de MongoDB válido (CastError)."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "INVALID_ID"
+                message: "El identificador proporcionado no es válido"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Rol no es TEACHER, o el alumno no pertenece a la cohorte del profesor.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                wrongRole:
+                  summary: Rol no es TEACHER
+                  value:
+                    error: "INSUFFICIENT_ROLE"
+                    message: "No tienes permiso para realizar esta acción"
+                notInCohort:
+                  summary: Alumno fuera de la cohorte
+                  value:
+                    error: "STUDENT_NOT_IN_COHORT"
+                    message: "Este alumno no pertenece a tu cohorte"
+        "404":
+          description: El `studentId` no existe en BD.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "STUDENT_NOT_FOUND"
+                message: "Alumno no encontrado"
+
+  /api/dashboard/admin:
+    get:
+      tags: [Dashboard]
+      summary: Dashboard de administración de la plataforma
+      description: >
+        Devuelve KPIs globales de la plataforma: recuentos de usuarios,
+        matrículas y cursos por estado; métricas de assessments; serie
+        temporal de crecimiento; y un resumen por curso.
+
+        Solo accesible por ADMIN.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Dashboard del administrador.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminDashboard"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/WrongRole"
+
+  /api/dashboard/admin/activity:
+    get:
+      tags: [Dashboard]
+      summary: Feed de actividad de la plataforma (admin)
+      description: >
+        Devuelve una serie temporal diaria de lecciones completadas en
+        los últimos N días, **sin huecos**: todos los días del rango tienen
+        una entrada, con 0 si no hubo actividad ese día.
+
+        **Parámetro `?days`:** entero que indica la ventana en días.
+        Procesado como `parseInt(days, 10) || 30` — el valor `0` (falsy)
+        se trata como ausente y da 30; un valor no numérico da 30.
+        Después se aplica `Math.min(Math.max(value, 1), 90)`, por lo que
+        el rango efectivo es **1–90** (constante `ACTIVITY_FEED_MAX_DAYS`).
+        El campo `days` de la respuesta refleja el valor efectivamente
+        usado, no el enviado.
+
+        Solo accesible por ADMIN.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: days
+          in: query
+          required: false
+          description: >
+            Ventana en días (1–90). Default 30. El valor 0 se trata como
+            ausente (da 30). Valores fuera de rango se recortan al límite.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 90
+            default: 30
+            example: 7
+      responses:
+        "200":
+          description: Serie temporal diaria de actividad.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ActivityFeed"
+              example:
+                days: 7
+                series:
+                  - date: "2026-06-25"
+                    lessonsCompleted: 3
+                  - date: "2026-06-26"
+                    lessonsCompleted: 0
+                  - date: "2026-06-27"
+                    lessonsCompleted: 5
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/WrongRole"
+
+  /api/dashboard/admin/at-risk:
+    get:
+      tags: [Dashboard]
+      summary: Alumnos en riesgo de abandono (admin)
+      description: >
+        Devuelve los alumnos activos con matrícula activa que cumplen ambas
+        condiciones a la vez:
+        - Llevan **≥ 7 días** sin completar ninguna lección (o nunca han
+          completado ninguna).
+        - Su progreso promedio entre cursos es **< 50 %**.
+
+        Estos umbrales son constantes del sistema (`AT_RISK_DAYS = 7`,
+        `AT_RISK_PROGRESS_THRESHOLD = 50`), devueltos en `threshold` de la
+        respuesta.
+
+        Solo accesible por ADMIN.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Lista de alumnos en riesgo.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AtRiskResult"
+              example:
+                threshold:
+                  days: 7
+                  progressBelow: 50
+                count: 1
+                students:
+                  - studentId: "663e0a1b2c3d4e5f6a7b8c9d"
+                    firstName: "Jane"
+                    lastName: "Doe"
+                    lastActivityAt: null
+                    daysSinceLastActivity: null
+                    overallProgressAvg: 10
+                    assignedTeacher:
+                      teacherId: "663e0a1b2c3d4e5f6a7b8c9e"
+                      firstName: "John"
+                      lastName: "Smith"
+                    enrollments:
+                      - courseTitle: "English Survival Kit"
+                        level: "A1"
+                        overallProgress: 10
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/WrongRole"
+
+components:
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    studentId:
+      name: studentId
+      in: path
+      required: true
+      description: ObjectId del alumno.
+      schema:
+        type: string
+        example: "663e0a1b2c3d4e5f6a7b8c9d"
+
+  responses:
+    Unauthorized:
+      description: Token ausente, expirado o inválido.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: "TOKEN_MISSING"
+            message: "Token de autenticación requerido"
+    WrongRole:
+      description: El rol del usuario autenticado no tiene acceso a este endpoint.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: "INSUFFICIENT_ROLE"
+            message: "No tienes permiso para realizar esta acción"
+
+  schemas:
+
+    # ── Student Dashboard ──────────────────────────────────────────────────────
+
+    StudentDashboard:
+      type: object
+      properties:
+        profile:
+          $ref: "#/components/schemas/StudentProfile"
+        summary:
+          $ref: "#/components/schemas/StudentSummary"
+        growth:
+          $ref: "#/components/schemas/StudentGrowth"
+        skillProgress:
+          $ref: "#/components/schemas/SkillProgress"
+        enrollments:
+          type: array
+          description: Detalle por cada matrícula activa del alumno.
+          items:
+            $ref: "#/components/schemas/EnrollmentDetail"
+        recentActivity:
+          type: array
+          description: Últimas 5 lecciones completadas, ordenadas por completedAt descendente.
+          items:
+            $ref: "#/components/schemas/ActivityItem"
+        pendingAssessments:
+          type: array
+          description: >
+            Assessments disponibles para el alumno: unidad con todas sus
+            lecciones completadas + assessment existente + no aprobado + intentos
+            restantes.
+          items:
+            $ref: "#/components/schemas/PendingAssessment"
+
+    StudentProfile:
+      type: object
+      properties:
+        studentId:
+          type: string
+          example: "663e0a1b2c3d4e5f6a7b8c9d"
+        firstName:
+          type: string
+          example: "Jane"
+        lastName:
+          type: string
+          example: "Doe"
+        avatarUrl:
+          type: string
+          nullable: true
+          example: null
+
+    StudentSummary:
+      type: object
+      properties:
+        totalEnrollments:
+          type: integer
+          description: Número de matrículas activas del alumno.
+          example: 2
+        overallProgressAvg:
+          type: integer
+          minimum: 0
+          maximum: 100
+          description: >
+            Media aritmética (entera) del `overallProgress` de cada
+            matrícula activa. 0 si no hay matrículas.
+          example: 45
+        totalLessonsCompleted:
+          type: integer
+          example: 10
+        totalLessons:
+          type: integer
+          description: Total de lecciones en todas las matrículas activas.
+          example: 30
+        assessmentsPassed:
+          type: integer
+          example: 2
+        assessmentsTotal:
+          type: integer
+          example: 4
+        avgBestScore:
+          type: integer
+          nullable: true
+          description: Media del mejor score de cada assessment. null si no hay intentos.
+          example: 85
+        lastActivityAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: MAX(completedAt) entre todas las matrículas activas.
+          example: "2026-06-30T11:30:00.000Z"
+        streakDays:
+          type: integer
+          minimum: 0
+          description: >
+            Días consecutivos (hasta hoy UTC) con al menos una lección
+            completada. Calculado en JS post-procesado, no via aggregation.
+          example: 3
+
+    StudentGrowth:
+      type: object
+      properties:
+        lessonsCompleted7d:
+          type: integer
+          description: Lecciones completadas en los últimos 7 días.
+          example: 2
+        lessonsCompleted30d:
+          type: integer
+          description: Lecciones completadas en los últimos 30 días.
+          example: 8
+        progressGained7d:
+          type: integer
+          minimum: 0
+          maximum: 100
+          description: >
+            `floor((lessonsCompleted7d / totalLessons) * 100)`. 0 si
+            totalLessons = 0.
+          example: 6
+        progressGained30d:
+          type: integer
+          minimum: 0
+          maximum: 100
+          example: 26
+        assessmentsPassed30d:
+          type: integer
+          description: Assessments superados en los últimos 30 días.
+          example: 1
+
+    SkillProgress:
+      type: object
+      description: >
+        Radar de habilidades calculado a partir de lecciones completadas y
+        scores de assessments. `writing` y `speaking` son siempre `null`
+        en esta versión (placeholders para una fase futura).
+        `_source: "preliminary"` indica que los valores son aproximaciones
+        basadas en tipos de lección, no evaluaciones directas.
+      properties:
+        listening:
+          type: integer
+          nullable: true
+          minimum: 0
+          maximum: 100
+          description: >
+            `floor((videoLessonsCompleted / videoLessonsTotal) * 100)`.
+            null si no hay lecciones de tipo video en los cursos activos.
+          example: 60
+        reading:
+          type: integer
+          nullable: true
+          minimum: 0
+          maximum: 100
+          description: >
+            `floor((textLessonsCompleted / textLessonsTotal) * 100)`.
+            null si no hay lecciones de tipo text en los cursos activos.
+          example: 75
+        assessmentScore:
+          type: integer
+          nullable: true
+          minimum: 0
+          maximum: 100
+          description: Media del mejor score por assessment. null si no hay intentos.
+          example: 85
+        writing:
+          type: "null"
+          description: Siempre null en esta versión (placeholder).
+          example: null
+        speaking:
+          type: "null"
+          description: Siempre null en esta versión (placeholder).
+          example: null
+        _source:
+          type: string
+          enum: [preliminary]
+          description: Siempre `"preliminary"` — indica que son estimaciones basadas en tipo de lección.
+          example: "preliminary"
+
+    EnrollmentDetail:
+      type: object
+      properties:
+        enrollmentId:
+          type: string
+          example: "665a2c3d4e5f6a7b8c9d0e30"
+        courseId:
+          type: string
+          example: "662d0a1b2c3d4e5f6a7b8c9c"
+        courseTitle:
+          type: string
+          example: "English Unplugged"
+        level:
+          type: string
+          example: "B1"
+        overallProgress:
+          type: integer
+          minimum: 0
+          maximum: 100
+          example: 45
+        completedLessons:
+          type: integer
+          example: 9
+        totalLessons:
+          type: integer
+          example: 20
+        lastActivityAt:
+          type: string
+          format: date-time
+          nullable: true
+          example: "2026-06-30T11:30:00.000Z"
+        daysSinceLastActivity:
+          type: integer
+          nullable: true
+          description: Días enteros desde `lastActivityAt`. null si nunca hubo actividad.
+          example: 1
+        enrollmentStatus:
+          type: string
+          enum: [active, suspended, completed]
+          example: "active"
+        nextLesson:
+          $ref: "#/components/schemas/NextLesson"
+
+    NextLesson:
+      type: object
+      nullable: true
+      description: >
+        Primera lección no completada y no bloqueada dentro de la siguiente
+        unidad disponible. null si no hay ninguna disponible (curso completo
+        o todas bloqueadas).
+      properties:
+        lessonId:
+          type: string
+          example: "665c2b3c4d5e6f7a8b9c0d01"
+        lessonTitle:
+          type: string
+          nullable: true
+          description: null si la lección fue eliminada tras calcular el progreso.
+          example: "Lección 3: Pasado simple"
+        unitId:
+          type: string
+          example: "665b1a2b3c4d5e6f7a8b9c01"
+        unitTitle:
+          type: string
+          example: "Unidad 1: Introducción"
+
+    ActivityItem:
+      type: object
+      properties:
+        lessonId:
+          type: string
+          example: "665c2b3c4d5e6f7a8b9c0d01"
+        lessonTitle:
+          type: string
+          example: "Lección 1: Saludos"
+        courseTitle:
+          type: string
+          example: "English Unplugged"
+        completedAt:
+          type: string
+          format: date-time
+          example: "2026-06-30T11:30:00.000Z"
+
+    PendingAssessment:
+      type: object
+      properties:
+        assessmentId:
+          type: string
+          example: "665d1c2d3e4f5a6b7c8d9e0f"
+        unitId:
+          type: string
+          example: "665b1a2b3c4d5e6f7a8b9c01"
+        unitTitle:
+          type: string
+          example: "Unidad 1: Introducción"
+        courseTitle:
+          type: string
+          example: "English Unplugged"
+        attemptsUsed:
+          type: integer
+          minimum: 0
+          example: 1
+        maxAttempts:
+          type: integer
+          minimum: 1
+          example: 3
+
+    # ── Teacher Dashboard ──────────────────────────────────────────────────────
+
+    TeacherDashboard:
+      type: object
+      properties:
+        profile:
+          type: object
+          properties:
+            teacherId:
+              type: string
+              example: "663e0a1b2c3d4e5f6a7b8c9e"
+            firstName:
+              type: string
+              example: "John"
+            lastName:
+              type: string
+              example: "Smith"
+        cohortSummary:
+          $ref: "#/components/schemas/CohortSummary"
+        cohortGrowth:
+          $ref: "#/components/schemas/CohortGrowth"
+        students:
+          type: array
+          description: Detalle de cada alumno de la cohorte.
+          items:
+            $ref: "#/components/schemas/CohortStudent"
+        atRiskStudents:
+          type: array
+          description: >
+            Subset de `students` que cumplen los criterios de riesgo
+            (≥ 7 días sin actividad Y progreso < 50 %).
+          items:
+            $ref: "#/components/schemas/AtRiskStudentSummary"
+
+    CohortSummary:
+      type: object
+      properties:
+        totalStudents:
+          type: integer
+          example: 12
+        activeStudents7d:
+          type: integer
+          description: Alumnos con al menos una lección completada en los últimos 7 días.
+          example: 8
+        cohortProgressAvg:
+          type: integer
+          minimum: 0
+          maximum: 100
+          description: >
+            Progreso medio de la cohorte calculado vía aggregation MongoDB
+            (media de los porcentajes por alumno/curso). 0 si no hay alumnos.
+          example: 54
+        atRiskCount:
+          type: integer
+          description: Número de alumnos en `atRiskStudents`.
+          example: 2
+        assessmentPassRate:
+          type: integer
+          nullable: true
+          minimum: 0
+          maximum: 100
+          description: >
+            `floor(passedAttempts / totalAttempts * 100)` de la cohorte.
+            null si no hay ningún intento.
+          example: 72
+
+    CohortGrowth:
+      type: object
+      properties:
+        lessonsCompleted7d:
+          type: integer
+          example: 24
+        lessonsCompleted30d:
+          type: integer
+          example: 98
+        assessmentsPassed30d:
+          type: integer
+          example: 8
+
+    CohortStudent:
+      type: object
+      properties:
+        studentId:
+          type: string
+          example: "663e0a1b2c3d4e5f6a7b8c9d"
+        firstName:
+          type: string
+          example: "Jane"
+        lastName:
+          type: string
+          example: "Doe"
+        avatarUrl:
+          type: string
+          nullable: true
+          example: null
+        isAtRisk:
+          type: boolean
+          example: false
+        daysSinceLastActivity:
+          type: integer
+          nullable: true
+          description: null si nunca completó ninguna lección.
+          example: 1
+        enrollments:
+          type: array
+          items:
+            type: object
+            properties:
+              courseId:
+                type: string
+                example: "662d0a1b2c3d4e5f6a7b8c9c"
+              courseTitle:
+                type: string
+                example: "English Unplugged"
+              level:
+                type: string
+                example: "B1"
+              overallProgress:
+                type: integer
+                minimum: 0
+                maximum: 100
+                example: 45
+              completedLessons:
+                type: integer
+                example: 9
+              totalLessons:
+                type: integer
+                example: 20
+              lastActivityAt:
+                type: string
+                format: date-time
+                nullable: true
+                example: "2026-06-30T11:30:00.000Z"
+              enrollmentStatus:
+                type: string
+                enum: [active, suspended, completed]
+                example: "active"
+
+    AtRiskStudentSummary:
+      type: object
+      properties:
+        studentId:
+          type: string
+          example: "663e0a1b2c3d4e5f6a7b8c9d"
+        firstName:
+          type: string
+          example: "Jane"
+        lastName:
+          type: string
+          example: "Doe"
+        daysSinceLastActivity:
+          type: integer
+          nullable: true
+          example: 10
+        overallProgressAvg:
+          type: integer
+          minimum: 0
+          maximum: 100
+          example: 20
+
+    # ── Admin Dashboard ────────────────────────────────────────────────────────
+
+    AdminDashboard:
+      type: object
+      properties:
+        platform:
+          $ref: "#/components/schemas/PlatformKPIs"
+        platformGrowth:
+          $ref: "#/components/schemas/PlatformGrowth"
+        coursesSummary:
+          type: array
+          description: Un item por cada curso de la plataforma (máximo 200).
+          items:
+            $ref: "#/components/schemas/CourseSummaryItem"
+
+    PlatformKPIs:
+      type: object
+      properties:
+        users:
+          type: object
+          properties:
+            admin:
+              type: integer
+              example: 1
+            teacher:
+              type: integer
+              example: 5
+            student:
+              type: integer
+              example: 80
+            total:
+              type: integer
+              example: 86
+            activeTotal:
+              type: integer
+              description: "Usuarios con `isActive: true`, cualquier rol."
+              example: 83
+        enrollments:
+          type: object
+          properties:
+            active:
+              type: integer
+              example: 65
+            suspended:
+              type: integer
+              example: 3
+            completed:
+              type: integer
+              example: 12
+            total:
+              type: integer
+              example: 80
+        courses:
+          type: object
+          properties:
+            draft:
+              type: integer
+              example: 2
+            published:
+              type: integer
+              example: 4
+            archived:
+              type: integer
+              example: 1
+            total:
+              type: integer
+              example: 7
+        lessons:
+          type: object
+          properties:
+            total:
+              type: integer
+              example: 130
+        assessments:
+          type: object
+          properties:
+            totalAttempts:
+              type: integer
+              example: 245
+            passRate:
+              type: integer
+              nullable: true
+              minimum: 0
+              maximum: 100
+              description: >
+                `floor(passedAttempts / totalAttempts * 100)`. null si no
+                hay intentos.
+              example: 68
+            avgScore:
+              type: integer
+              nullable: true
+              description: Media de todos los scores (intentos). null si no hay intentos.
+              example: 72
+
+    PlatformGrowth:
+      type: object
+      properties:
+        newEnrollments7d:
+          type: integer
+          example: 5
+        newEnrollments30d:
+          type: integer
+          example: 18
+        lessonsCompleted7d:
+          type: integer
+          example: 120
+        lessonsCompleted30d:
+          type: integer
+          example: 480
+        assessmentsPassed30d:
+          type: integer
+          example: 35
+        activeUsers7d:
+          type: integer
+          description: Alumnos activos con `lastLoginAt >= 7 días`.
+          example: 40
+        activeUsers30d:
+          type: integer
+          description: Alumnos activos con `lastLoginAt >= 30 días`.
+          example: 60
+
+    CourseSummaryItem:
+      type: object
+      properties:
+        courseId:
+          type: string
+          example: "662d0a1b2c3d4e5f6a7b8c9c"
+        title:
+          type: string
+          example: "English Unplugged"
+        level:
+          type: string
+          example: "B1"
+        status:
+          type: string
+          enum: [draft, published, archived]
+          example: "published"
+        totalEnrollments:
+          type: integer
+          example: 25
+        activeEnrollments:
+          type: integer
+          example: 20
+        completedEnrollments:
+          type: integer
+          example: 3
+        avgProgress:
+          type: integer
+          minimum: 0
+          maximum: 100
+          description: Media del progreso de cada alumno matriculado. 0 si no hay matrículas.
+          example: 54
+        lastActivityAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: MAX(completedAt) de todos los alumnos del curso. null si nadie ha completado nada.
+          example: "2026-06-30T11:30:00.000Z"
+
+    # ── Activity Feed ──────────────────────────────────────────────────────────
+
+    ActivityFeed:
+      type: object
+      properties:
+        days:
+          type: integer
+          minimum: 1
+          maximum: 90
+          description: Ventana efectivamente usada (puede diferir del valor enviado si fue ajustado).
+          example: 7
+        series:
+          type: array
+          description: >
+            Una entrada por cada día del rango, sin huecos. Los días sin
+            actividad tienen `lessonsCompleted: 0`.
+          items:
+            type: object
+            properties:
+              date:
+                type: string
+                format: date
+                description: Fecha en formato `YYYY-MM-DD` (UTC).
+                example: "2026-06-25"
+              lessonsCompleted:
+                type: integer
+                minimum: 0
+                example: 5
+
+    # ── At-Risk ───────────────────────────────────────────────────────────────
+
+    AtRiskResult:
+      type: object
+      properties:
+        threshold:
+          type: object
+          properties:
+            days:
+              type: integer
+              description: Días sin actividad a partir de los cuales un alumno se considera en riesgo.
+              example: 7
+            progressBelow:
+              type: integer
+              description: Progreso promedio por debajo del cual un alumno se considera en riesgo.
+              example: 50
+        count:
+          type: integer
+          description: Número de alumnos en riesgo.
+          example: 3
+        students:
+          type: array
+          items:
+            $ref: "#/components/schemas/AtRiskStudentDetail"
+
+    AtRiskStudentDetail:
+      type: object
+      properties:
+        studentId:
+          type: string
+          example: "663e0a1b2c3d4e5f6a7b8c9d"
+        firstName:
+          type: string
+          example: "Jane"
+        lastName:
+          type: string
+          example: "Doe"
+        lastActivityAt:
+          type: string
+          format: date-time
+          nullable: true
+          example: null
+        daysSinceLastActivity:
+          type: integer
+          nullable: true
+          description: null si el alumno nunca ha completado ninguna lección.
+          example: null
+        overallProgressAvg:
+          type: integer
+          minimum: 0
+          maximum: 100
+          description: Progreso medio entre todos sus cursos con LessonProgress.
+          example: 10
+        assignedTeacher:
+          type: object
+          nullable: true
+          properties:
+            teacherId:
+              type: string
+              example: "663e0a1b2c3d4e5f6a7b8c9e"
+            firstName:
+              type: string
+              example: "John"
+            lastName:
+              type: string
+              example: "Smith"
+        enrollments:
+          type: array
+          items:
+            type: object
+            properties:
+              courseTitle:
+                type: string
+                example: "English Survival Kit"
+              level:
+                type: string
+                example: "A1"
+              overallProgress:
+                type: integer
+                minimum: 0
+                maximum: 100
+                example: 10
+
+    # ── Error ─────────────────────────────────────────────────────────────────
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+          example: "INSUFFICIENT_ROLE"
+        message:
+          type: string
+          example: "No tienes permiso para realizar esta acción"
+        fields:
+          type: array
+          items:
+            type: object
+            properties:
+              field:
+                type: string
+              message:
+                type: string

@@ -1,0 +1,182 @@
+openapi: 3.0.3
+
+info:
+  title: Elevate Your English — Achievements API
+  version: 1.0.0
+
+tags:
+  - name: Achievements
+    description: >
+      Sistema de logros (gamificación). Montado bajo `/api/achievements`.
+      Solo expone un endpoint de lectura — los logros se desbloquean
+      automáticamente como efecto secundario de otras acciones del sistema
+      (completar lecciones, cursos, assessments, crear el perfil, etc.) y
+      no tienen endpoint de creación manual.
+
+paths:
+
+  /api/achievements/me:
+    get:
+      tags: [Achievements]
+      summary: Listar los logros desbloqueados del usuario autenticado
+      description: >
+        Devuelve únicamente los logros que el usuario ya ha desbloqueado,
+        ordenados por `unlockedAt` descendente (más reciente primero).
+        **No muestra los logros disponibles pero no desbloqueados.**
+
+        La respuesta proyecta los campos del `Achievement` directamente en
+        cada item — **no expone `_id`, `user`, el ObjectId de
+        `achievement`, ni `metadata`**.
+
+        Si el usuario no tiene logros devuelve `{ achievements: [] }`.
+
+        Solo requiere `verifyToken` (sin `requireRole`). Cualquier rol
+        autenticado puede acceder.
+
+        **Logros del sistema** (slugs conocidos, desencadenados
+        automáticamente por otros módulos):
+
+        | Slug | Desencadenado por |
+        |---|---|
+        | `welcome_to_elevate` | Creación de cuenta |
+        | `profile_completed` | Completar firstName + lastName + avatarUrl |
+        | `first_lesson_completed` | Primera lección completada |
+        | `five_lessons_completed` | 5 lecciones completadas en total |
+        | `ten_lessons_completed` | 10 lecciones completadas en total |
+        | `first_unit_completed` | Primera unidad al 100 % |
+        | `first_course_completed` | Primer curso al 100 % |
+        | `seven_day_streak` | 7 días consecutivos con al menos una lección |
+        | `perfect_assessment` | Score 100 en un assessment |
+        | `one_hundred_points` | `achievementPoints` alcanza exactamente 100 |
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Logros desbloqueados del usuario autenticado.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  achievements:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/UnlockedAchievement"
+              example:
+                achievements:
+                  - name: "First Steps"
+                    slug: "first_lesson_completed"
+                    description: "Completed your first lesson."
+                    icon: "🎯"
+                    category: "LESSON"
+                    points: 10
+                    rarity: "COMMON"
+                    unlockedAt: "2026-06-30T11:30:00.000Z"
+                  - name: "Welcome!"
+                    slug: "welcome_to_elevate"
+                    description: "Joined Elevate Your English Campus."
+                    icon: "🌟"
+                    category: "PLATFORM"
+                    points: 10
+                    rarity: "COMMON"
+                    unlockedAt: "2026-06-30T09:00:00.000Z"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+components:
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  responses:
+    Unauthorized:
+      description: Token ausente, expirado o inválido.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          examples:
+            tokenMissing:
+              summary: Sin token
+              value:
+                error: "TOKEN_MISSING"
+                message: "Token de autenticación requerido"
+            tokenExpired:
+              summary: Token caducado
+              value:
+                error: "TOKEN_EXPIRED"
+                message: "El token ha expirado"
+            tokenInvalid:
+              summary: Token malformado
+              value:
+                error: "TOKEN_INVALID"
+                message: "Token inválido"
+
+  schemas:
+    UnlockedAchievement:
+      type: object
+      description: >
+        Proyección de un logro desbloqueado. Los campos del documento
+        `Achievement` se aplanan directamente en el item. No se incluyen
+        `_id`, `user`, el ObjectId de `achievement` ni `metadata`.
+        `isActive` tampoco se incluye (solo se desbloquean logros con
+        `isActive: true`).
+      properties:
+        name:
+          type: string
+          maxLength: 100
+          example: "First Steps"
+        slug:
+          type: string
+          description: Identificador único del logro. Siempre en minúsculas.
+          maxLength: 100
+          example: "first_lesson_completed"
+        description:
+          type: string
+          maxLength: 500
+          example: "Completed your first lesson."
+        icon:
+          type: string
+          description: Representación visual del logro (emoji o identificador de icono).
+          example: "🎯"
+        category:
+          type: string
+          enum: [COURSE, LESSON, STREAK, PROGRESS, ASSESSMENT, PLATFORM]
+          example: "LESSON"
+        points:
+          type: integer
+          minimum: 0
+          description: Puntos otorgados al usuario al desbloquear este logro.
+          example: 10
+        rarity:
+          type: string
+          enum: [COMMON, RARE, EPIC, LEGENDARY]
+          description: Rareza del logro.
+          example: "COMMON"
+        unlockedAt:
+          type: string
+          format: date-time
+          description: Momento en que el usuario desbloqueó este logro.
+          example: "2026-06-30T11:30:00.000Z"
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+          example: "TOKEN_MISSING"
+        message:
+          type: string
+          example: "Token de autenticación requerido"
+        fields:
+          type: array
+          items:
+            type: object
+            properties:
+              field:
+                type: string
+              message:
+                type: string

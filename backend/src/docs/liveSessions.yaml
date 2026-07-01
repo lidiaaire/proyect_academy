@@ -1,0 +1,359 @@
+openapi: 3.0.3
+
+info:
+  title: Elevate Your English — Live Sessions API
+  version: 1.0.0
+
+tags:
+  - name: Live Sessions
+    description: >
+      Consulta y ciclo de vida (start/finish) de las videollamadas (LiveSession)
+      asociadas a una Booking confirmada.
+
+paths:
+
+  /api/live-sessions/booking/{bookingId}:
+    get:
+      tags: [Live Sessions]
+      summary: Obtener la LiveSession de una reserva
+      description: >
+        Devuelve la LiveSession asociada a la Booking indicada.
+
+        Autorización: ver sección "Autorización común" más abajo.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/bookingId"
+      responses:
+        "200":
+          description: LiveSession encontrada.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LiveSession"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          description: >
+            No existe ninguna LiveSession para esa Booking, o (caso teórico,
+            inalcanzable en la práctica porque `booking` es una referencia
+            obligatoria de `LiveSession`) la Booking referenciada por la
+            sesión no existe.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RawMessageError"
+              examples:
+                sessionNotFound:
+                  summary: No existe LiveSession para esa booking
+                  value:
+                    message: "Live session not found"
+                bookingNotFound:
+                  summary: Booking referenciada inexistente (caso teórico)
+                  value:
+                    message: "Booking not found"
+
+  /api/live-sessions/room/{roomId}:
+    get:
+      tags: [Live Sessions]
+      summary: Obtener la LiveSession de una sala
+      description: >
+        Devuelve la LiveSession asociada al `roomId` indicado.
+
+        Autorización: ver sección "Autorización común" más abajo (la
+        comprobación de pertenencia se resuelve igualmente a través de la
+        Booking asociada a la sesión encontrada por `roomId`).
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/roomId"
+      responses:
+        "200":
+          description: LiveSession encontrada.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LiveSession"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          description: >
+            No existe ninguna LiveSession con ese `roomId`, o (caso teórico,
+            inalcanzable en la práctica) la Booking referenciada por la
+            sesión no existe.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RawMessageError"
+              examples:
+                sessionNotFound:
+                  summary: No existe LiveSession con ese roomId
+                  value:
+                    message: "Live session not found"
+                bookingNotFound:
+                  summary: Booking referenciada inexistente (caso teórico)
+                  value:
+                    message: "Booking not found"
+
+  /api/live-sessions/booking/{bookingId}/start:
+    post:
+      tags: [Live Sessions]
+      summary: Iniciar una LiveSession
+      description: >
+        Transiciona la LiveSession asociada a la Booking de `SCHEDULED` a
+        `ACTIVE` y fija `startedAt` a la fecha/hora actual. Si el alumno de
+        la reserva aún no tiene un registro de Attendance para esta sesión,
+        se crea uno con `status: ABSENT`.
+
+        Autorización: ver sección "Autorización común" más abajo. **No hay
+        ninguna restricción adicional sobre quién puede iniciar la sesión**:
+        cualquier actor que pase `canAccessLiveSession` (admin, el alumno de
+        la reserva o el profesor de la reserva) puede ejecutar el start,
+        incluido el propio alumno.
+
+        Transición de estado inválida: si la sesión no está actualmente en
+        `SCHEDULED` (p. ej. ya está `ACTIVE` o `FINISHED`), el service lanza
+        un `Error` genérico (no un `ApiError`), que el `errorHandler` capta
+        en su rama por defecto y responde **500** `INTERNAL_SERVER_ERROR`
+        en lugar de un 400/409 — este es el comportamiento real actual, no
+        un caso documentado de forma idealizada.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/bookingId"
+      responses:
+        "200":
+          description: LiveSession transicionada a ACTIVE.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LiveSession"
+              example:
+                _id: "665a2c3d4e5f6a7b8c9d0e1f"
+                booking: "665a2c3d4e5f6a7b8c9d0e10"
+                roomId: "booking-665a2c3d4e5f6a7b8c9d0e10"
+                provider: "JITSI"
+                joinUrl: "https://meet.jit.si/booking-665a2c3d4e5f6a7b8c9d0e10"
+                status: "ACTIVE"
+                startedAt: "2026-07-02T09:00:05.000Z"
+                endedAt: null
+                createdAt: "2026-06-29T10:30:00.000Z"
+                updatedAt: "2026-07-02T09:00:05.000Z"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          description: No existe ninguna LiveSession para esa Booking.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RawMessageError"
+              example:
+                message: "Live session not found"
+        "500":
+          description: >
+            La LiveSession no está en estado `SCHEDULED` (transición de
+            estado inválida). Comportamiento actual del backend: se
+            devuelve 500 en lugar de un código 4xx.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "INTERNAL_SERVER_ERROR"
+                message: "Error interno del servidor"
+
+  /api/live-sessions/booking/{bookingId}/finish:
+    post:
+      tags: [Live Sessions]
+      summary: Finalizar una LiveSession
+      description: >
+        Transiciona la LiveSession asociada a la Booking de `ACTIVE` a
+        `FINISHED` y fija `endedAt` a la fecha/hora actual.
+
+        Autorización: ver sección "Autorización común" más abajo. Igual que
+        en `start`, no hay restricción adicional sobre quién puede finalizar
+        la sesión más allá de pasar `canAccessLiveSession`.
+
+        Transición de estado inválida: si la sesión no está actualmente en
+        `ACTIVE` (p. ej. todavía `SCHEDULED` o ya `FINISHED`), el service
+        lanza un `Error` genérico, capturado por el `errorHandler` en su
+        rama por defecto → **500** `INTERNAL_SERVER_ERROR`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/bookingId"
+      responses:
+        "200":
+          description: LiveSession transicionada a FINISHED.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LiveSession"
+              example:
+                _id: "665a2c3d4e5f6a7b8c9d0e1f"
+                booking: "665a2c3d4e5f6a7b8c9d0e10"
+                roomId: "booking-665a2c3d4e5f6a7b8c9d0e10"
+                provider: "JITSI"
+                joinUrl: "https://meet.jit.si/booking-665a2c3d4e5f6a7b8c9d0e10"
+                status: "FINISHED"
+                startedAt: "2026-07-02T09:00:05.000Z"
+                endedAt: "2026-07-02T09:55:00.000Z"
+                createdAt: "2026-06-29T10:30:00.000Z"
+                updatedAt: "2026-07-02T09:55:00.000Z"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          description: No existe ninguna LiveSession para esa Booking.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RawMessageError"
+              example:
+                message: "Live session not found"
+        "500":
+          description: >
+            La LiveSession no está en estado `ACTIVE` (transición de estado
+            inválida). Comportamiento actual del backend: se devuelve 500
+            en lugar de un código 4xx.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "INTERNAL_SERVER_ERROR"
+                message: "Error interno del servidor"
+
+components:
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    bookingId:
+      name: bookingId
+      in: path
+      required: true
+      description: ObjectId de la Booking asociada a la LiveSession.
+      schema:
+        type: string
+        example: "665a2c3d4e5f6a7b8c9d0e10"
+    roomId:
+      name: roomId
+      in: path
+      required: true
+      description: >
+        Identificador de sala de la LiveSession (formato `booking-<bookingId>`
+        para el provider JITSI por defecto).
+      schema:
+        type: string
+        example: "booking-665a2c3d4e5f6a7b8c9d0e10"
+
+  responses:
+    Unauthorized:
+      description: Token de autenticación ausente o inválido.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: "TOKEN_MISSING"
+            message: "Token de autenticación requerido"
+    Forbidden:
+      description: >
+        El usuario autenticado no es ADMIN, ni el alumno (`student`), ni el
+        profesor (`teacher`) de la Booking asociada a la LiveSession.
+        Respuesta generada directamente por el middleware
+        `canAccessLiveSession` (no pasa por el `errorHandler` central, por
+        lo que el body no incluye el campo `error`).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/RawMessageError"
+          example:
+            message: "Forbidden"
+
+  schemas:
+    LiveSession:
+      type: object
+      properties:
+        _id:
+          type: string
+          example: "665a2c3d4e5f6a7b8c9d0e1f"
+        booking:
+          type: string
+          description: ObjectId de la Booking asociada (relación 1:1, única).
+          example: "665a2c3d4e5f6a7b8c9d0e10"
+        roomId:
+          type: string
+          example: "booking-665a2c3d4e5f6a7b8c9d0e10"
+        provider:
+          type: string
+          enum: [JITSI, GOOGLE_MEET, ZOOM]
+          example: "JITSI"
+        joinUrl:
+          type: string
+          example: "https://meet.jit.si/booking-665a2c3d4e5f6a7b8c9d0e10"
+        status:
+          type: string
+          enum: [SCHEDULED, ACTIVE, FINISHED]
+          example: "SCHEDULED"
+        startedAt:
+          type: string
+          format: date-time
+          nullable: true
+          example: null
+        endedAt:
+          type: string
+          format: date-time
+          nullable: true
+          example: null
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    RawMessageError:
+      type: object
+      description: >
+        Forma de error específica de este módulo: las respuestas 403/404
+        de `liveSession.controller.js` y `liveSession.authorization.js` se
+        escriben directamente con `res.status(...).json({ message })`, sin
+        pasar por el `errorHandler` central, por lo que no incluyen el
+        campo `error` que sí tienen el resto de respuestas de error de la
+        API (ver `Error`).
+      properties:
+        message:
+          type: string
+          example: "Forbidden"
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+          example: "TOKEN_MISSING"
+        message:
+          type: string
+          example: "Token de autenticación requerido"
+        fields:
+          type: array
+          items:
+            type: object
+            properties:
+              field:
+                type: string
+              message:
+                type: string

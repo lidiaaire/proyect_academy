@@ -57,6 +57,17 @@ class LessonProgressRepository extends BaseRepository {
     return this.model.countDocuments({ enrollmentId, status: PROGRESS_STATUS.COMPLETED });
   }
 
+  async countCompletedByStudent(studentId) {
+    return this.model.countDocuments({ studentId, status: PROGRESS_STATUS.COMPLETED });
+  }
+
+  async findCompletedDatesByStudent(studentId) {
+    return this.model.find(
+      { studentId, status: PROGRESS_STATUS.COMPLETED, completedAt: { $ne: null } },
+      { completedAt: 1, _id: 0 },
+    ).lean();
+  }
+
   async deleteAllByLesson(lessonId) {
     return this.model.deleteMany({ lessonId });
   }

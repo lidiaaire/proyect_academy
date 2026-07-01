@@ -71,11 +71,6 @@ const createLessonSchema = [
 
   body('order')
     .not().exists().withMessage('El campo order es asignado automáticamente por el sistema'),
-
-  body('type')
-    .not().exists({ checkNull: false })
-    .if(body('type').exists())
-    .custom(() => true),
 ];
 
 const updateLessonSchema = [

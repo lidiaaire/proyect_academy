@@ -1,0 +1,894 @@
+openapi: 3.0.3
+
+info:
+  title: Elevate Your English — Lessons API
+  version: 1.0.0
+
+tags:
+  - name: Lessons
+    description: >
+      Gestión de lecciones (Lesson) dentro de una unidad. Montado bajo
+      `/api/courses/:courseId/units/:unitId/lessons` (mergeParams a través
+      de Units). `type` es inmutable tras la creación.
+
+paths:
+
+  /api/courses/{courseId}/units/{unitId}/lessons:
+    get:
+      tags: [Lessons]
+      summary: Listar lecciones de una unidad
+      description: >
+        Devuelve las lecciones de la unidad indicada, ordenadas por `order`
+        ascendente, como `{ docs, total }` (sin metadatos de paginación —
+        `LessonRepository.findByUnitId` aplica `skip`/`limit` internos con
+        defaults `skip=0, limit=100`, sin query params para controlarlos).
+
+        La proyección de listado **excluye `content` y `videoUrl`** (se
+        obtienen solo en `GET .../lessons/:id`).
+
+        Restricciones de autorización (sin `requireRole`, solo
+        `verifyToken`):
+        - ADMIN puede listar las lecciones de cualquier curso, sea cual
+          sea su `status`.
+        - TEACHER y STUDENT solo pueden listar lecciones de un curso
+          `published` → 403 `COURSE_NOT_PUBLISHED` si no lo está.
+        - STUDENT, además, debe tener una Enrollment **activa**
+          (`status: active`) en ese curso → 403 `NOT_ENROLLED` si no la
+          tiene.
+
+        Para STUDENT, cada lección de la respuesta incluye además `locked`
+        y `completed`:
+        - `completed`: hay un `LessonProgress` con `status: completed`
+          para ese alumno/lección.
+        - `locked`: depende de `unit.sequentialUnlock`. Si es `false`,
+          nunca está bloqueada. Si es `true`: la primera lección de la
+          unidad (`order: 1`) está bloqueada si la unidad anterior no está
+          completamente superada (todas sus lecciones completadas y, si
+          tiene assessment, aprobado); el resto de lecciones están
+          bloqueadas si la lección anterior de la misma unidad no está
+          `completed`.
+
+        Para ADMIN/TEACHER, los documentos se devuelven sin `locked` ni
+        `completed`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/courseId"
+        - $ref: "#/components/parameters/unitId"
+      responses:
+        "200":
+          description: Lecciones de la unidad.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  docs:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/LessonListItem"
+                  total:
+                    type: integer
+                    example: 1
+              examples:
+                comoAdminOTeacher:
+                  summary: Respuesta para ADMIN/TEACHER (sin locked/completed)
+                  value:
+                    docs:
+                      - _id: "665c2b3c4d5e6f7a8b9c0d01"
+                        unitId: "665b1a2b3c4d5e6f7a8b9c01"
+                        courseId: "662d0a1b2c3d4e5f6a7b8c9c"
+                        title: "Lección 1: Saludos"
+                        type: "text"
+                        duration: 10
+                        order: 1
+                        createdAt: "2026-01-10T09:10:00.000Z"
+                        updatedAt: "2026-01-10T09:10:00.000Z"
+                    total: 1
+                comoStudent:
+                  summary: Respuesta para STUDENT (con locked/completed)
+                  value:
+                    docs:
+                      - _id: "665c2b3c4d5e6f7a8b9c0d01"
+                        unitId: "665b1a2b3c4d5e6f7a8b9c01"
+                        courseId: "662d0a1b2c3d4e5f6a7b8c9c"
+                        title: "Lección 1: Saludos"
+                        type: "text"
+                        duration: 10
+                        order: 1
+                        createdAt: "2026-01-10T09:10:00.000Z"
+                        updatedAt: "2026-01-10T09:10:00.000Z"
+                        locked: false
+                        completed: false
+                    total: 1
+        "400":
+          description: "`courseId` o `unitId` no son un ObjectId de MongoDB válido."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "VALIDATION_ERROR"
+                message: "Datos de entrada inválidos"
+                fields:
+                  - field: "unitId"
+                    message: "El unitId debe ser un ObjectId de MongoDB válido"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: >
+            El curso no está `published` (TEACHER/STUDENT), o el STUDENT
+            no tiene matrícula activa en él.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                notPublished:
+                  summary: Curso no publicado, rol distinto de ADMIN
+                  value:
+                    error: "COURSE_NOT_PUBLISHED"
+                    message: "El curso no está disponible"
+                notEnrolled:
+                  summary: Student sin matrícula activa en el curso
+                  value:
+                    error: "NOT_ENROLLED"
+                    message: "No tienes matrícula activa en este curso"
+        "404":
+          description: No existe el curso, o no existe ninguna unidad con ese `unitId` dentro de ese curso.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                courseNotFound:
+                  summary: Curso no encontrado
+                  value:
+                    error: "COURSE_NOT_FOUND"
+                    message: "Curso no encontrado"
+                unitNotFound:
+                  summary: Unidad no encontrada
+                  value:
+                    error: "UNIT_NOT_FOUND"
+                    message: "Unidad no encontrada"
+
+    post:
+      tags: [Lessons]
+      summary: Crear una lección
+      description: >
+        Crea una lección nueva en la unidad indicada. El `order` se asigna
+        automáticamente como `maxOrder(unidad) + 1` (campo `order`
+        explícitamente prohibido en el body — 400 si se envía).
+
+        Validación de coherencia tipo/contenido (`assertTypeContentCoherence`):
+        - `type: text` requiere `content` (truthy) → 422 `CONTENT_REQUIRED`
+          si falta.
+        - `type: video` requiere `videoUrl` (truthy) → 422
+          `VIDEO_URL_REQUIRED` si falta.
+        - `type: quiz` no exige ni `content` ni `videoUrl`.
+
+        Restricción de negocio real: **se permite crear lecciones tanto en
+        cursos `draft` como `published`** — solo se rechaza si el curso
+        está `archived` → 403 `COURSE_ARCHIVED`.
+
+        Si el curso ya está `published` y tiene alumnos con matrícula
+        activa, se crea automáticamente un `LessonProgress`
+        (`status: not_started`) para cada uno de esos alumnos, para que la
+        nueva lección aparezca también en el progreso de quienes ya
+        estaban matriculados.
+
+        Solo accesible por ADMIN.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/courseId"
+        - $ref: "#/components/parameters/unitId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateLessonInput"
+            examples:
+              text:
+                summary: Lección de tipo text
+                value:
+                  title: "Lección 1: Saludos"
+                  type: "text"
+                  content: "Hello, how are you? ..."
+                  duration: 10
+              video:
+                summary: Lección de tipo video
+                value:
+                  title: "Lección 2: Pronunciación"
+                  type: "video"
+                  videoUrl: "https://cdn.example.com/lessons/pron.mp4"
+                  duration: 15
+              quiz:
+                summary: Lección de tipo quiz
+                value:
+                  title: "Lección 3: Repaso"
+                  type: "quiz"
+                  duration: 5
+      responses:
+        "201":
+          description: Lección creada.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  lesson:
+                    $ref: "#/components/schemas/Lesson"
+              example:
+                lesson:
+                  _id: "665c2b3c4d5e6f7a8b9c0d01"
+                  unitId: "665b1a2b3c4d5e6f7a8b9c01"
+                  courseId: "662d0a1b2c3d4e5f6a7b8c9c"
+                  title: "Lección 1: Saludos"
+                  type: "text"
+                  content: "Hello, how are you? ..."
+                  videoUrl: null
+                  duration: 10
+                  order: 1
+                  createdAt: "2026-06-30T10:00:00.000Z"
+                  updatedAt: "2026-06-30T10:00:00.000Z"
+        "400":
+          description: "`courseId`/`unitId` inválidos, o datos de entrada inválidos (incluye intentar enviar `order`)."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                validationError:
+                  summary: Campo de contenido inválido
+                  value:
+                    error: "VALIDATION_ERROR"
+                    message: "Datos de entrada inválidos"
+                    fields:
+                      - field: "title"
+                        message: "El título debe tener entre 3 y 100 caracteres"
+                orderForbidden:
+                  summary: Se intentó enviar order manualmente
+                  value:
+                    error: "VALIDATION_ERROR"
+                    message: "Datos de entrada inválidos"
+                    fields:
+                      - field: "order"
+                        message: "El campo order es asignado automáticamente por el sistema"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: El rol no es ADMIN, o el curso está `archived`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                insufficientRole:
+                  summary: Rol no permitido en la ruta
+                  value:
+                    error: "INSUFFICIENT_ROLE"
+                    message: "No tienes permiso para realizar esta acción"
+                courseArchived:
+                  summary: Curso archivado
+                  value:
+                    error: "COURSE_ARCHIVED"
+                    message: "No se pueden añadir lecciones a un curso archivado"
+        "404":
+          description: No existe el curso, o no existe ninguna unidad con ese `unitId` dentro de ese curso.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                courseNotFound:
+                  summary: Curso no encontrado
+                  value:
+                    error: "COURSE_NOT_FOUND"
+                    message: "Curso no encontrado"
+                unitNotFound:
+                  summary: Unidad no encontrada
+                  value:
+                    error: "UNIT_NOT_FOUND"
+                    message: "Unidad no encontrada"
+        "422":
+          description: "`type` y el campo de contenido correspondiente (`content`/`videoUrl`) son incoherentes."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                contentRequired:
+                  summary: type=text sin content
+                  value:
+                    error: "CONTENT_REQUIRED"
+                    message: "Las lecciones de tipo text requieren el campo content"
+                videoUrlRequired:
+                  summary: type=video sin videoUrl
+                  value:
+                    error: "VIDEO_URL_REQUIRED"
+                    message: "Las lecciones de tipo video requieren el campo videoUrl"
+
+  /api/courses/{courseId}/units/{unitId}/lessons/reorder:
+    patch:
+      tags: [Lessons]
+      summary: Reordenar las lecciones de una unidad
+      description: >
+        Recalcula el `order` de todas las lecciones de la unidad según la
+        posición de cada id en `orderedIds` (operación atómica vía
+        `bulkWrite`).
+
+        Validaciones de negocio (en orden):
+        1. `orderedIds` debe incluir **exactamente** todas las lecciones de
+           la unidad, ni más ni menos → 422 `REORDER_INCOMPLETE` si la
+           longitud no coincide.
+        2. Todos los ids deben pertenecer a esa unidad → 422
+           `REORDER_INVALID_ID` si alguno no corresponde.
+
+        No hay restricción por `status` del curso: se puede reordenar en
+        `draft`, `published` o `archived`.
+
+        Solo accesible por ADMIN. Esta ruta se declara antes que
+        `GET/PATCH/DELETE /:id` en el router, por lo que `reorder` nunca es
+        interpretado como un `:id`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/courseId"
+        - $ref: "#/components/parameters/unitId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [orderedIds]
+              properties:
+                orderedIds:
+                  type: array
+                  minItems: 1
+                  description: >
+                    Array con el ObjectId de cada lección de la unidad, en
+                    el orden deseado. Debe contener exactamente todas las
+                    lecciones existentes de la unidad.
+                  items:
+                    type: string
+                  example:
+                    - "665c2b3c4d5e6f7a8b9c0d02"
+                    - "665c2b3c4d5e6f7a8b9c0d01"
+      responses:
+        "204":
+          description: Lecciones reordenadas correctamente. Sin contenido en la respuesta.
+        "400":
+          description: "`courseId`/`unitId` inválidos, o `orderedIds` ausente/vacío/con elementos que no son ObjectId."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "VALIDATION_ERROR"
+                message: "Datos de entrada inválidos"
+                fields:
+                  - field: "orderedIds"
+                    message: "orderedIds debe ser un array no vacío"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/AdminOnly"
+        "404":
+          description: No existe el curso, o no existe ninguna unidad con ese `unitId` dentro de ese curso.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                courseNotFound:
+                  summary: Curso no encontrado
+                  value:
+                    error: "COURSE_NOT_FOUND"
+                    message: "Curso no encontrado"
+                unitNotFound:
+                  summary: Unidad no encontrada
+                  value:
+                    error: "UNIT_NOT_FOUND"
+                    message: "Unidad no encontrada"
+        "422":
+          description: "`orderedIds` no coincide exactamente con las lecciones de la unidad."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                incomplete:
+                  summary: Faltan o sobran ids respecto a las lecciones reales
+                  value:
+                    error: "REORDER_INCOMPLETE"
+                    message: "orderedIds debe incluir todas las lecciones de la unidad"
+                invalidId:
+                  summary: Algún id no pertenece a esta unidad
+                  value:
+                    error: "REORDER_INVALID_ID"
+                    message: "Algún id no pertenece a esta unidad"
+
+  /api/courses/{courseId}/units/{unitId}/lessons/{id}:
+    get:
+      tags: [Lessons]
+      summary: Obtener una lección por id
+      description: >
+        Devuelve el documento completo de Lesson (incluye `content` y
+        `videoUrl`, a diferencia del listado).
+
+        Restricciones de autorización: ADMIN sin restricción; TEACHER y
+        STUDENT requieren curso `published` (403 `COURSE_NOT_PUBLISHED`).
+
+        **Orden real de comprobaciones** (relevante para qué error se
+        recibe primero): a diferencia de `GET .../units/:id`, aquí el
+        curso y la unidad y **la propia lección se cargan antes** de
+        comprobar la matrícula del STUDENT. Es decir, un STUDENT no
+        matriculado recibirá primero 404 `LESSON_NOT_FOUND` si el id de
+        lección no existe, y solo si existe pasará a evaluarse 403
+        `NOT_ENROLLED`.
+
+        Para STUDENT, además, una vez confirmada la matrícula se comprueba
+        si la lección está bloqueada (mismo criterio `locked` que en el
+        listado) → 403 `LESSON_LOCKED` si lo está. Esta comprobación no se
+        aplica a ADMIN ni TEACHER.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/courseId"
+        - $ref: "#/components/parameters/unitId"
+        - $ref: "#/components/parameters/lessonId"
+      responses:
+        "200":
+          description: Lección encontrada.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  lesson:
+                    $ref: "#/components/schemas/Lesson"
+        "400":
+          description: "`courseId`, `unitId` o `id` no son un ObjectId de MongoDB válido."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "VALIDATION_ERROR"
+                message: "Datos de entrada inválidos"
+                fields:
+                  - field: "id"
+                    message: "El id debe ser un ObjectId de MongoDB válido"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: >
+            El curso no está `published` (TEACHER/STUDENT), el STUDENT no
+            tiene matrícula activa, o la lección está bloqueada para ese
+            STUDENT (lección/unidad anterior no completada).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                notPublished:
+                  summary: Curso no publicado, rol distinto de ADMIN
+                  value:
+                    error: "COURSE_NOT_PUBLISHED"
+                    message: "El curso no está disponible"
+                notEnrolled:
+                  summary: Student sin matrícula activa en el curso
+                  value:
+                    error: "NOT_ENROLLED"
+                    message: "No tienes matrícula activa en este curso"
+                lessonLocked:
+                  summary: Lección bloqueada por sequentialUnlock
+                  value:
+                    error: "LESSON_LOCKED"
+                    message: "Debes completar la lección anterior primero"
+        "404":
+          description: No existe el curso, la unidad, o la lección con ese id dentro de esa unidad.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                courseNotFound:
+                  summary: Curso no encontrado
+                  value:
+                    error: "COURSE_NOT_FOUND"
+                    message: "Curso no encontrado"
+                unitNotFound:
+                  summary: Unidad no encontrada
+                  value:
+                    error: "UNIT_NOT_FOUND"
+                    message: "Unidad no encontrada"
+                lessonNotFound:
+                  summary: Lección no encontrada
+                  value:
+                    error: "LESSON_NOT_FOUND"
+                    message: "Lección no encontrada"
+
+    patch:
+      tags: [Lessons]
+      summary: Actualizar una lección
+      description: >
+        Actualiza `title`, `content`, `videoUrl` y/o `duration`. El campo
+        `type` es **inmutable**: si se envía en el body, la validación lo
+        rechaza con 400 (no se ignora silenciosamente a nivel HTTP, aunque
+        el service también lo descartaría defensivamente si llegara). El
+        campo `order` también está prohibido (400 si se envía).
+
+        Si se actualiza `content` o `videoUrl`, se revalida la coherencia
+        con el `type` **actual** (inmutable) de la lección — mismas reglas
+        que en `create` (422 `CONTENT_REQUIRED` / `VIDEO_URL_REQUIRED` si
+        el nuevo valor resulta en una lección `text` sin `content` o
+        `video` sin `videoUrl`, incluyendo el caso de enviarlos como
+        `null`).
+
+        **Sin restricción por `status` del curso**: a diferencia de
+        `create` y `delete`, `update` no comprueba el `status` del curso —
+        se puede actualizar una lección de un curso `draft`, `published` o
+        `archived`.
+
+        Solo accesible por ADMIN.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/courseId"
+        - $ref: "#/components/parameters/unitId"
+        - $ref: "#/components/parameters/lessonId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateLessonInput"
+      responses:
+        "200":
+          description: Lección actualizada.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  lesson:
+                    $ref: "#/components/schemas/Lesson"
+        "400":
+          description: "Parámetros inválidos, datos de entrada inválidos, o se incluyó `type`/`order`."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                typeForbidden:
+                  summary: Se intentó cambiar type
+                  value:
+                    error: "VALIDATION_ERROR"
+                    message: "Datos de entrada inválidos"
+                    fields:
+                      - field: "type"
+                        message: "El tipo de lección es inmutable — elimina y recrea la lección para cambiarlo"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/AdminOnly"
+        "404":
+          description: No existe el curso, la unidad, o la lección con ese id dentro de esa unidad.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                courseNotFound:
+                  summary: Curso no encontrado
+                  value:
+                    error: "COURSE_NOT_FOUND"
+                    message: "Curso no encontrado"
+                unitNotFound:
+                  summary: Unidad no encontrada
+                  value:
+                    error: "UNIT_NOT_FOUND"
+                    message: "Unidad no encontrada"
+                lessonNotFound:
+                  summary: Lección no encontrada
+                  value:
+                    error: "LESSON_NOT_FOUND"
+                    message: "Lección no encontrada"
+        "422":
+          description: "El nuevo `content`/`videoUrl` es incoherente con el `type` (inmutable) de la lección."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                contentRequired:
+                  summary: Lección text, content puesto a vacío/null
+                  value:
+                    error: "CONTENT_REQUIRED"
+                    message: "Las lecciones de tipo text requieren el campo content"
+                videoUrlRequired:
+                  summary: Lección video, videoUrl puesto a vacío/null
+                  value:
+                    error: "VIDEO_URL_REQUIRED"
+                    message: "Las lecciones de tipo video requieren el campo videoUrl"
+
+    delete:
+      tags: [Lessons]
+      summary: Eliminar una lección
+      description: >
+        Elimina la lección indicada, borra todos los `LessonProgress`
+        asociados a ella, y **recompacta el `order`** de las lecciones
+        restantes de la unidad (1..N, según su orden actual) en la misma
+        operación.
+
+        Solo se permite si el curso está en `draft` → 403
+        `CANNOT_DELETE_LESSON` en cualquier otro estado.
+
+        Solo accesible por ADMIN.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/courseId"
+        - $ref: "#/components/parameters/unitId"
+        - $ref: "#/components/parameters/lessonId"
+      responses:
+        "204":
+          description: Lección eliminada (y order de las restantes recompactado). Sin contenido en la respuesta.
+        "400":
+          description: "`courseId`, `unitId` o `id` no son un ObjectId de MongoDB válido."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "VALIDATION_ERROR"
+                message: "Datos de entrada inválidos"
+                fields:
+                  - field: "id"
+                    message: "El id debe ser un ObjectId de MongoDB válido"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: El rol no es ADMIN, o el curso no está en estado `draft`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                insufficientRole:
+                  summary: Rol no permitido en la ruta
+                  value:
+                    error: "INSUFFICIENT_ROLE"
+                    message: "No tienes permiso para realizar esta acción"
+                cannotDelete:
+                  summary: Curso no está en draft
+                  value:
+                    error: "CANNOT_DELETE_LESSON"
+                    message: "Solo se pueden eliminar lecciones de cursos en estado draft"
+        "404":
+          description: No existe el curso, la unidad, o la lección con ese id dentro de esa unidad.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                courseNotFound:
+                  summary: Curso no encontrado
+                  value:
+                    error: "COURSE_NOT_FOUND"
+                    message: "Curso no encontrado"
+                unitNotFound:
+                  summary: Unidad no encontrada
+                  value:
+                    error: "UNIT_NOT_FOUND"
+                    message: "Unidad no encontrada"
+                lessonNotFound:
+                  summary: Lección no encontrada
+                  value:
+                    error: "LESSON_NOT_FOUND"
+                    message: "Lección no encontrada"
+
+components:
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    courseId:
+      name: courseId
+      in: path
+      required: true
+      description: ObjectId del Course.
+      schema:
+        type: string
+        example: "662d0a1b2c3d4e5f6a7b8c9c"
+    unitId:
+      name: unitId
+      in: path
+      required: true
+      description: ObjectId de la Unit a la que pertenecen las lecciones.
+      schema:
+        type: string
+        example: "665b1a2b3c4d5e6f7a8b9c01"
+    lessonId:
+      name: id
+      in: path
+      required: true
+      description: ObjectId de la Lesson.
+      schema:
+        type: string
+        example: "665c2b3c4d5e6f7a8b9c0d01"
+
+  responses:
+    Unauthorized:
+      description: Token de autenticación ausente o inválido.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: "TOKEN_MISSING"
+            message: "Token de autenticación requerido"
+    AdminOnly:
+      description: El rol del usuario autenticado no es ADMIN.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: "INSUFFICIENT_ROLE"
+            message: "No tienes permiso para realizar esta acción"
+
+  schemas:
+    Lesson:
+      type: object
+      properties:
+        _id:
+          type: string
+          example: "665c2b3c4d5e6f7a8b9c0d01"
+        unitId:
+          type: string
+          example: "665b1a2b3c4d5e6f7a8b9c01"
+        courseId:
+          type: string
+          description: Denormalizado desde la Unit para queries eficientes.
+          example: "662d0a1b2c3d4e5f6a7b8c9c"
+        title:
+          type: string
+          example: "Lección 1: Saludos"
+        type:
+          type: string
+          enum: [video, text, quiz]
+          description: Inmutable tras la creación.
+          example: "text"
+        content:
+          type: string
+          nullable: true
+          description: Presente y obligatorio (truthy) si type=text.
+          example: "Hello, how are you? ..."
+        videoUrl:
+          type: string
+          nullable: true
+          description: Presente y obligatorio (truthy) si type=video.
+          example: null
+        duration:
+          type: integer
+          nullable: true
+          minimum: 1
+          maximum: 300
+          description: Minutos estimados de la lección. Opcional pese a lo que indica el comentario de cabecera del modelo.
+          example: 10
+        order:
+          type: integer
+          minimum: 1
+          description: Asignado automáticamente por el sistema (maxOrder + 1 al crear).
+          example: 1
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    LessonListItem:
+      allOf:
+        - $ref: "#/components/schemas/Lesson"
+        - type: object
+          description: >
+            En el listado, `content` y `videoUrl` no se proyectan (quedan
+            fuera del documento, no como null). Para STUDENT se añaden
+            `locked` y `completed`.
+          properties:
+            locked:
+              type: boolean
+              description: Solo presente para STUDENT.
+              example: false
+            completed:
+              type: boolean
+              description: Solo presente para STUDENT.
+              example: false
+
+    CreateLessonInput:
+      type: object
+      required: [title, type]
+      properties:
+        title:
+          type: string
+          minLength: 3
+          maxLength: 100
+          example: "Lección 1: Saludos"
+        type:
+          type: string
+          enum: [video, text, quiz]
+          example: "text"
+        content:
+          type: string
+          nullable: true
+          maxLength: 50000
+          description: Requerido (truthy) si type=text.
+          example: "Hello, how are you? ..."
+        videoUrl:
+          type: string
+          nullable: true
+          maxLength: 500
+          description: Requerido (truthy) si type=video. URL http(s) válida.
+          example: "https://cdn.example.com/lessons/pron.mp4"
+        duration:
+          type: integer
+          minimum: 1
+          maximum: 300
+          description: Opcional, en minutos.
+          example: 10
+
+    UpdateLessonInput:
+      type: object
+      description: >
+        Todos los campos son opcionales. `type` y `order` no están
+        permitidos (se rechazan con 400 si se incluyen).
+      properties:
+        title:
+          type: string
+          minLength: 3
+          maxLength: 100
+          example: "Lección 1: Saludos (revisada)"
+        content:
+          type: string
+          nullable: true
+          maxLength: 50000
+          example: "Hello! How are you doing today? ..."
+        videoUrl:
+          type: string
+          nullable: true
+          maxLength: 500
+          example: "https://cdn.example.com/lessons/pron-v2.mp4"
+        duration:
+          type: integer
+          minimum: 1
+          maximum: 300
+          example: 12
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+          example: "LESSON_NOT_FOUND"
+        message:
+          type: string
+          example: "Lección no encontrada"
+        fields:
+          type: array
+          items:
+            type: object
+            properties:
+              field:
+                type: string
+              message:
+                type: string

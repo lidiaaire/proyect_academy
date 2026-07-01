@@ -1,0 +1,326 @@
+openapi: 3.0.3
+
+info:
+  title: Elevate Your English — Teacher Analytics API
+  version: 1.0.0
+
+tags:
+  - name: Teacher Analytics
+    description: >
+      Métricas avanzadas para el profesor sobre su cohorte de alumnos.
+      Montado bajo `/api/teacher-analytics`. Ambos endpoints son solo
+      lectura y devuelven **arrays directos sin envelope**
+      (`res.json(array)`). Solo accesibles por TEACHER.
+      No existe archivo `teacher-analytics.validator.js` — no hay
+      validación express-validator en las rutas; los errores de formato de
+      parámetros de ruta llegan al `errorHandler` como CastError (400
+      `INVALID_ID`).
+
+paths:
+
+  /api/teacher-analytics/assessment-breakdown:
+    get:
+      tags: [Teacher Analytics]
+      summary: Desglose de assessments de la cohorte del profesor
+      description: >
+        Devuelve métricas agregadas de todos los assessments intentados
+        por los alumnos asignados al profesor autenticado
+        (`User.assignedTeacherId === teacherId`).
+
+        El scope son **todos los alumnos** de la cohorte (hasta 1000
+        usuarios con `assignedTeacherId`), agrupados contra todos los
+        assessments que hayan intentado, independientemente del curso.
+
+        Si el profesor no tiene alumnos asignados o ninguno ha realizado
+        intentos, devuelve `[]`.
+
+        La respuesta es un **array plano sin envelope**, ordenado
+        arbitrariamente (sin `$sort` final en el pipeline MongoDB).
+
+        **Campos numéricos con decimal:** `avgScore` y `avgAttempts` se
+        calculan con `$round` a 1 decimal en MongoDB y pueden ser
+        decimales (p. ej. `87.5`, `1.8`).
+
+        Solo accesible por TEACHER.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: >
+            Array de items de desglose. Array vacío si la cohorte no tiene
+            alumnos o ninguno ha realizado intentos.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AssessmentBreakdownItem"
+              examples:
+                conDatos:
+                  summary: Cohorte con intentos de assessments
+                  value:
+                    - assessmentId: "665d1c2d3e4f5a6b7c8d9e0f"
+                      unitTitle: "Unidad 1: Introducción"
+                      courseTitle: "English Unplugged"
+                      passRate: 75
+                      avgScore: 82.5
+                      avgAttempts: 1.8
+                      totalStudentsTried: 8
+                sinDatos:
+                  summary: Cohorte vacía o sin intentos
+                  value: []
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/TeacherOnly"
+
+  /api/teacher-analytics/students/{studentId}/weekly-trend:
+    get:
+      tags: [Teacher Analytics]
+      summary: Tendencia semanal de progreso de un alumno de la cohorte
+      description: >
+        Devuelve la serie de actividad semanal ISO del alumno indicado
+        durante las últimas 8 semanas en las que completó al menos una
+        lección.
+
+        **Validación de scope (primera operación):** el alumno debe existir
+        y tener `assignedTeacherId === teacherId` → 403
+        `STUDENT_NOT_IN_COHORT` si no pertenece a la cohorte. Si no existe
+        → 404 `STUDENT_NOT_FOUND`.
+
+        **Sin middleware `validate`:** no hay express-validator en esta
+        ruta. Un `studentId` con formato no-ObjectId produce CastError en
+        `UserRepository.findById` → 400 `INVALID_ID` vía errorHandler.
+
+        **Ventana de datos:** solo semanas ISO con al menos una lección
+        completada en las últimas 8 semanas. Semanas con actividad fuera
+        de la ventana contribuyen a `cumulativeProgress` como baseline
+        previo pero no generan una entrada propia. Puede devolver `[]` si
+        no hubo ninguna lección completada en las últimas 8 semanas.
+
+        **`cumulativeProgress`:** acumulado respecto al total de lecciones
+        en todos los `LessonProgress` del alumno (todas las matrículas,
+        no solo las activas).
+
+        La respuesta es un **array plano sin envelope**, ordenado por
+        semana ascendente.
+
+        Solo accesible por TEACHER.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/studentId"
+      responses:
+        "200":
+          description: >
+            Array de puntos semanales. Array vacío si el alumno no
+            completó ninguna lección en las últimas 8 semanas.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/WeeklyTrendItem"
+              examples:
+                conDatos:
+                  summary: Alumno con actividad en las últimas 8 semanas
+                  value:
+                    - weekLabel: "2026-W25"
+                      lessonsCompleted: 3
+                      cumulativeProgress: 15
+                    - weekLabel: "2026-W26"
+                      lessonsCompleted: 5
+                      cumulativeProgress: 40
+                sinDatos:
+                  summary: Sin actividad en las últimas 8 semanas
+                  value: []
+        "400":
+          description: "`studentId` no es un ObjectId de MongoDB válido (CastError)."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "INVALID_ID"
+                message: "El identificador proporcionado no es válido"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Rol no es TEACHER, o el alumno no pertenece a la cohorte del profesor.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                wrongRole:
+                  summary: Rol no es TEACHER
+                  value:
+                    error: "INSUFFICIENT_ROLE"
+                    message: "No tienes permiso para realizar esta acción"
+                notInCohort:
+                  summary: Alumno fuera de la cohorte
+                  value:
+                    error: "STUDENT_NOT_IN_COHORT"
+                    message: "Este alumno no pertenece a tu cohorte"
+        "404":
+          description: El `studentId` no existe en BD.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "STUDENT_NOT_FOUND"
+                message: "Alumno no encontrado"
+
+components:
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    studentId:
+      name: studentId
+      in: path
+      required: true
+      description: ObjectId del alumno de la cohorte.
+      schema:
+        type: string
+        example: "663e0a1b2c3d4e5f6a7b8c9d"
+
+  responses:
+    Unauthorized:
+      description: Token ausente, expirado o inválido.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          examples:
+            tokenMissing:
+              summary: Sin token
+              value:
+                error: "TOKEN_MISSING"
+                message: "Token de autenticación requerido"
+            tokenExpired:
+              summary: Token caducado
+              value:
+                error: "TOKEN_EXPIRED"
+                message: "El token ha expirado"
+            tokenInvalid:
+              summary: Token malformado
+              value:
+                error: "TOKEN_INVALID"
+                message: "Token inválido"
+    TeacherOnly:
+      description: El rol del usuario autenticado no es TEACHER.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: "INSUFFICIENT_ROLE"
+            message: "No tienes permiso para realizar esta acción"
+
+  schemas:
+    AssessmentBreakdownItem:
+      type: object
+      description: >
+        Métricas de un assessment concreto para la cohorte del profesor.
+        Solo aparecen assessments que al menos un alumno de la cohorte
+        haya intentado.
+      properties:
+        assessmentId:
+          type: string
+          description: ObjectId del Assessment.
+          example: "665d1c2d3e4f5a6b7c8d9e0f"
+        unitTitle:
+          type: string
+          description: Título de la unidad que contiene el assessment. `"Unidad desconocida"` si la unidad fue eliminada.
+          example: "Unidad 1: Introducción"
+        courseTitle:
+          type: string
+          description: Título del curso que contiene el assessment. `"Curso desconocido"` si el curso fue eliminado.
+          example: "English Unplugged"
+        passRate:
+          type: integer
+          minimum: 0
+          maximum: 100
+          description: >
+            Porcentaje de alumnos de la cohorte que han superado el
+            assessment al menos una vez.
+            `floor((passedStudents / totalStudentsTried) * 100)`.
+          example: 75
+        avgScore:
+          type: number
+          minimum: 0
+          maximum: 100
+          description: >
+            Media del mejor score de cada alumno que intentó el assessment.
+            Calculado con `$round` a 1 decimal en MongoDB — puede ser un
+            número decimal (p. ej. `87.5`).
+          example: 82.5
+        avgAttempts:
+          type: number
+          minimum: 1
+          description: >
+            Media de intentos por alumno que intentó el assessment.
+            Calculado con `$round` a 1 decimal — puede ser decimal
+            (p. ej. `1.8`).
+          example: 1.8
+        totalStudentsTried:
+          type: integer
+          minimum: 1
+          description: Número de alumnos de la cohorte que realizaron al menos un intento.
+          example: 8
+
+    WeeklyTrendItem:
+      type: object
+      description: >
+        Actividad del alumno en una semana ISO concreta. Solo se incluyen
+        semanas con al menos una lección completada dentro de las últimas
+        8 semanas.
+      properties:
+        weekLabel:
+          type: string
+          description: >
+            Identificador de la semana en formato `"YYYY-WWW"` (año ISO +
+            número de semana ISO con cero a la izquierda). Ejemplo:
+            `"2026-W01"`, `"2026-W26"`.
+          example: "2026-W26"
+        lessonsCompleted:
+          type: integer
+          minimum: 1
+          description: Lecciones completadas por el alumno en esa semana concreta.
+          example: 5
+        cumulativeProgress:
+          type: integer
+          minimum: 0
+          maximum: 100
+          description: >
+            `floor((lessonesCompletadasAcumuladas / totalLessons) * 100)`
+            al final de esa semana. `totalLessons` es el total de
+            `LessonProgress` del alumno en todas sus matrículas (incluidas
+            las suspendidas), no solo las activas. Parte de un baseline
+            previo a la ventana de 8 semanas.
+          example: 40
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+          example: "STUDENT_NOT_IN_COHORT"
+        message:
+          type: string
+          example: "Este alumno no pertenece a tu cohorte"
+        fields:
+          type: array
+          items:
+            type: object
+            properties:
+              field:
+                type: string
+              message:
+                type: string

@@ -1,0 +1,503 @@
+openapi: 3.0.3
+
+info:
+  title: Elevate Your English — Auth API
+  version: 1.0.0
+
+tags:
+  - name: Auth
+    description: >
+      Autenticación y gestión de sesión. Montado bajo `/api/auth`.
+      JWT stateless — no existe blacklist de tokens en el MVP; el logout
+      solo indica al cliente que descarte el token localmente.
+
+paths:
+
+  /api/auth/login:
+    post:
+      tags: [Auth]
+      summary: Iniciar sesión
+      description: >
+        Autentica al usuario con email y contraseña y devuelve un JWT.
+
+        **Devuelve 201** (no 200) — comportamiento real del backend.
+
+        El campo `user.id` de la respuesta es el ObjectId del usuario —
+        nótese que se llama `id`, no `_id`, a diferencia del resto de la
+        API.
+
+        El TTL del token varía según el rol del usuario y se configura
+        mediante variables de entorno (`JWT_TTL_ADMIN`, `JWT_TTL_TEACHER`,
+        `JWT_TTL_STUDENT`). El campo `expiresIn` de la respuesta refleja
+        el valor de esa variable tal cual (p. ej. `"1d"`, `"7d"`).
+
+        `lastLoginAt` del usuario se actualiza como efecto secundario,
+        pero de forma **fire-and-forget** (sin `await`) para no añadir
+        latencia al response — puede no estar reflejado aún en BD en el
+        mismo instante.
+
+        **Rate limiting:** máximo 5 intentos por IP en una ventana de 15
+        minutos. Al superarlo → 429 `TOO_MANY_REQUESTS`. Las cabeceras
+        `RateLimit-*` (RFC 6585) se incluyen en todas las respuestas de
+        este endpoint.
+
+        Validaciones (en orden):
+        1. `email` y `password` presentes y con formato válido → 400
+           `VALIDATION_ERROR`.
+        2. El email existe y la contraseña es correcta → si no → 401
+           `INVALID_CREDENTIALS` (mismo error para email inexistente y
+           contraseña incorrecta, para no facilitar enumeración de cuentas).
+        3. La cuenta está activa → 403 `ACCOUNT_INACTIVE` si no.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginInput"
+            example:
+              email: "admin@elevate.com"
+              password: "Admin2024!"
+      responses:
+        "201":
+          description: Sesión iniciada correctamente.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoginResult"
+              example:
+                token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+                expiresIn: "1d"
+                user:
+                  id: "663e0a1b2c3d4e5f6a7b8c9d"
+                  firstName: "Admin"
+                  lastName: "Test"
+                  email: "admin@elevate.com"
+                  role: "admin"
+                  avatarUrl: null
+        "400":
+          description: Campo `email` o `password` ausente o con formato inválido.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "VALIDATION_ERROR"
+                message: "Datos de entrada inválidos"
+                fields:
+                  - field: "email"
+                    message: "El email es obligatorio"
+        "401":
+          description: Credenciales incorrectas (email inexistente o contraseña errónea).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "INVALID_CREDENTIALS"
+                message: "Credenciales incorrectas"
+        "403":
+          description: Las credenciales son correctas, pero la cuenta está desactivada.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "ACCOUNT_INACTIVE"
+                message: "La cuenta está desactivada"
+        "429":
+          description: >
+            Límite de intentos superado (5 por IP en 15 minutos). Generado
+            por el rate limiter — incluye el campo `error` como el resto de
+            la API (`standardHeaders: true`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "TOO_MANY_REQUESTS"
+                message: "Demasiados intentos. Inténtalo en 15 minutos."
+
+  /api/auth/logout:
+    post:
+      tags: [Auth]
+      summary: Cerrar sesión
+      description: >
+        Cierra la sesión del usuario autenticado. En el MVP no existe
+        blacklist de tokens — el servidor simplemente responde con un
+        mensaje de confirmación. **El token sigue siendo válido en el
+        servidor hasta su expiración natural**; el cliente es responsable
+        de descartarlo localmente.
+
+        No hay body ni efectos secundarios en BD.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Sesión cerrada (token descartado por el cliente).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "Sesión cerrada correctamente"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/auth/me:
+    get:
+      tags: [Auth]
+      summary: Obtener el usuario autenticado
+      description: >
+        Devuelve el documento completo del usuario autenticado (sin
+        `passwordHash`) tal como está almacenado en BD en ese instante
+        — campos frescos, no los del payload del JWT.
+
+        Campos incluidos: `_id`, `firstName`, `lastName`, `email`, `role`,
+        `isActive`, `avatarUrl`, `assignedTeacherId` (nullable), `lastLoginAt`
+        (nullable), `achievementPoints`, `createdAt`, `updatedAt`.
+
+        Requiere `requireActiveUser` (verificación real en BD) → 403
+        `ACCOUNT_INACTIVE` / 404 `USER_NOT_FOUND` si la cuenta fue
+        desactivada o eliminada desde que se emitió el token.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Datos frescos del usuario autenticado.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user:
+                    $ref: "#/components/schemas/UserFull"
+              example:
+                user:
+                  _id: "663e0a1b2c3d4e5f6a7b8c9d"
+                  firstName: "Admin"
+                  lastName: "Test"
+                  email: "admin@elevate.com"
+                  role: "admin"
+                  isActive: true
+                  avatarUrl: null
+                  assignedTeacherId: null
+                  lastLoginAt: "2026-06-30T11:00:00.000Z"
+                  achievementPoints: 0
+                  createdAt: "2026-01-01T00:00:00.000Z"
+                  updatedAt: "2026-06-30T11:00:00.000Z"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: La cuenta del usuario autenticado está desactivada.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "ACCOUNT_INACTIVE"
+                message: "La cuenta está desactivada"
+        "404":
+          description: El usuario del token ya no existe en BD (caso extremo).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "USER_NOT_FOUND"
+                message: "Usuario no encontrado"
+
+  /api/auth/change-password:
+    patch:
+      tags: [Auth]
+      summary: Cambiar contraseña
+      description: >
+        Cambia la contraseña del usuario autenticado.
+
+        Requiere `requireActiveUser` — mismas condiciones que `GET /me`.
+
+        El body exige **tres campos**: `currentPassword`, `newPassword` y
+        `confirmPassword`. La validación de coincidencia entre `newPassword`
+        y `confirmPassword` la hace express-validator (400 si no coinciden).
+        El service solo usa `currentPassword` y `newPassword`.
+
+        **Reglas de `newPassword`:** mínimo 8 caracteres, máximo 72,
+        al menos una mayúscula y al menos un número.
+
+        No invalida los tokens existentes del usuario (JWT stateless — el
+        token anterior sigue funcionando hasta su expiración natural).
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChangePasswordInput"
+            example:
+              currentPassword: "Admin2024!"
+              newPassword: "NuevaPass2026!"
+              confirmPassword: "NuevaPass2026!"
+      responses:
+        "200":
+          description: Contraseña actualizada correctamente.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "Contraseña actualizada correctamente"
+        "400":
+          description: Validación fallida (campo ausente, contraseña nueva inválida, o no coinciden).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                campoAusente:
+                  summary: Campo requerido ausente
+                  value:
+                    error: "VALIDATION_ERROR"
+                    message: "Datos de entrada inválidos"
+                    fields:
+                      - field: "currentPassword"
+                        message: "La contraseña actual es obligatoria"
+                contrasenasNoCoinciden:
+                  summary: newPassword y confirmPassword no coinciden
+                  value:
+                    error: "VALIDATION_ERROR"
+                    message: "Datos de entrada inválidos"
+                    fields:
+                      - field: "confirmPassword"
+                        message: "Las contraseñas no coinciden"
+                contrasenaNoCumpleRequisitos:
+                  summary: newPassword no cumple requisitos de complejidad
+                  value:
+                    error: "VALIDATION_ERROR"
+                    message: "Datos de entrada inválidos"
+                    fields:
+                      - field: "newPassword"
+                        message: "La nueva contraseña debe contener al menos una mayúscula"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: >
+            Cuenta desactivada (`requireActiveUser`), o la contraseña
+            actual proporcionada es incorrecta.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                accountInactive:
+                  summary: Cuenta desactivada
+                  value:
+                    error: "ACCOUNT_INACTIVE"
+                    message: "La cuenta está desactivada"
+                wrongPassword:
+                  summary: Contraseña actual incorrecta
+                  value:
+                    error: "WRONG_CURRENT_PASSWORD"
+                    message: "La contraseña actual es incorrecta"
+        "404":
+          description: El usuario del token ya no existe en BD (caso extremo).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "USER_NOT_FOUND"
+                message: "Usuario no encontrado"
+
+components:
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  responses:
+    Unauthorized:
+      description: >
+        Token ausente, expirado o inválido. Tres códigos posibles según
+        el motivo exacto.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          examples:
+            tokenMissing:
+              summary: Cabecera Authorization ausente o sin prefijo Bearer
+              value:
+                error: "TOKEN_MISSING"
+                message: "Token de autenticación requerido"
+            tokenExpired:
+              summary: Token caducado
+              value:
+                error: "TOKEN_EXPIRED"
+                message: "El token ha expirado"
+            tokenInvalid:
+              summary: Token malformado o firma inválida
+              value:
+                error: "TOKEN_INVALID"
+                message: "Token inválido"
+
+  schemas:
+    LoginInput:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+          description: Se normaliza a minúsculas con `normalizeEmail`.
+          example: "admin@elevate.com"
+        password:
+          type: string
+          description: No se valida complejidad en login, solo presencia.
+          example: "Admin2024!"
+
+    LoginResult:
+      type: object
+      properties:
+        token:
+          type: string
+          description: JWT firmado con `JWT_SECRET`.
+          example: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+        expiresIn:
+          type: string
+          description: >
+            Valor de la variable de entorno de TTL para el rol del
+            usuario (`JWT_TTL_ADMIN`, `JWT_TTL_TEACHER` o
+            `JWT_TTL_STUDENT`). Formato libre definido por el operador
+            (p. ej. `"1d"`, `"7d"`, `"24h"`).
+          example: "1d"
+        user:
+          $ref: "#/components/schemas/LoginUser"
+
+    LoginUser:
+      type: object
+      description: >
+        Subconjunto del documento User devuelto al iniciar sesión. El
+        campo identificador se llama `id` (no `_id`) — comportamiento
+        propio de este endpoint.
+      properties:
+        id:
+          type: string
+          description: ObjectId del usuario (`_id` en BD, expuesto como `id` aquí).
+          example: "663e0a1b2c3d4e5f6a7b8c9d"
+        firstName:
+          type: string
+          example: "Admin"
+        lastName:
+          type: string
+          example: "Test"
+        email:
+          type: string
+          format: email
+          example: "admin@elevate.com"
+        role:
+          type: string
+          enum: [admin, teacher, student]
+          example: "admin"
+        avatarUrl:
+          type: string
+          nullable: true
+          example: null
+
+    UserFull:
+      type: object
+      description: >
+        Documento User completo devuelto por `GET /api/auth/me`. El campo
+        `passwordHash` nunca se incluye (`select: false` en el modelo).
+        El identificador aquí sí es `_id` (a diferencia de la respuesta
+        de login).
+      properties:
+        _id:
+          type: string
+          example: "663e0a1b2c3d4e5f6a7b8c9d"
+        firstName:
+          type: string
+          example: "Admin"
+        lastName:
+          type: string
+          example: "Test"
+        email:
+          type: string
+          format: email
+          example: "admin@elevate.com"
+        role:
+          type: string
+          enum: [admin, teacher, student]
+          example: "admin"
+        isActive:
+          type: boolean
+          example: true
+        avatarUrl:
+          type: string
+          nullable: true
+          example: null
+        assignedTeacherId:
+          type: string
+          nullable: true
+          description: Solo relevante para usuarios con rol `student`.
+          example: null
+        lastLoginAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: Actualizado de forma fire-and-forget al hacer login.
+          example: "2026-06-30T11:00:00.000Z"
+        achievementPoints:
+          type: integer
+          minimum: 0
+          example: 0
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    ChangePasswordInput:
+      type: object
+      required: [currentPassword, newPassword, confirmPassword]
+      properties:
+        currentPassword:
+          type: string
+          example: "Admin2024!"
+        newPassword:
+          type: string
+          minLength: 8
+          maxLength: 72
+          description: >
+            Mínimo 8 caracteres, máximo 72, al menos una mayúscula, al
+            menos un número.
+          example: "NuevaPass2026!"
+        confirmPassword:
+          type: string
+          description: Debe ser idéntico a `newPassword`.
+          example: "NuevaPass2026!"
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+          example: "INVALID_CREDENTIALS"
+        message:
+          type: string
+          example: "Credenciales incorrectas"
+        fields:
+          type: array
+          items:
+            type: object
+            properties:
+              field:
+                type: string
+              message:
+                type: string

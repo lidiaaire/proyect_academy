@@ -1,0 +1,670 @@
+openapi: 3.0.3
+
+info:
+  title: Elevate Your English — Courses API
+  version: 1.0.0
+
+tags:
+  - name: Courses
+    description: >
+      Gestión de cursos (ciclo de vida draft → published → archived). Solo
+      se documentan los endpoints realmente montados en `course.routes.js`.
+      El handler `remove` (DELETE) existe en el controller y en el service
+      (`deleteCourse`), pero **no hay ninguna ruta `DELETE` registrada en el
+      router** — es código muerto, inalcanzable, y por tanto no se documenta
+      aquí. Las rutas anidadas bajo `/:courseId/units` pertenecen al módulo
+      Units y tampoco se documentan en este archivo.
+
+paths:
+
+  /api/courses:
+    get:
+      tags: [Courses]
+      summary: Listar cursos
+      description: >
+        El resultado depende del rol del usuario autenticado:
+
+        - **ADMIN**: todos los cursos (cualquier `status`), filtrables por
+          `level` (y por `status` si se añadiera al filtro — actualmente el
+          controller solo reenvía `level`, no `status`, al service).
+        - **TEACHER**: siempre se sobreescribe el filtro a
+          `status=published`, ignorando cualquier `level` recibido.
+        - **STUDENT**: solo los cursos `published` en los que el alumno
+          tiene una Enrollment (sin filtrar explícitamente por `status:
+          ACTIVE` de la enrollment — se comprueban todas sus matrículas,
+          activas o no, mientras exista alguna).
+
+        **Paginación (ADMIN y TEACHER):** `page`, `limit`, `sortBy` y
+        `sortOrder` se aplican realmente a la consulta vía
+        `pagination.toMongoOptions(query.page, query.limit, query.sortBy,
+        query.sortOrder)`. Defaults si se omiten: `page=1`, `limit=20`
+        (máximo 100), `sortBy=createdAt`, `sortOrder=desc`. Para STUDENT no
+        se aplica paginación en absoluto (se devuelven todos los cursos
+        matriculados).
+
+        La respuesta es siempre `{ docs, total }`: **no incluye** `page`,
+        `limit`, `totalPages`, `hasNext` ni `hasPrev`, aunque esos campos
+        sí existen en la utilidad `pagination.build` — no se usan en la
+        respuesta de este endpoint.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: level
+          in: query
+          required: false
+          description: >
+            Filtra por nivel CEFR. Solo tiene efecto para ADMIN (para
+            TEACHER el filtro de status lo sobreescribe el service de
+            todas formas con `level` aplicado igualmente; para STUDENT se
+            ignora).
+          schema:
+            type: string
+            enum: [A1, A2, B1, B2, C1, C2]
+            example: "B1"
+        - name: page
+          in: query
+          required: false
+          description: >
+            Número de página (mínimo 1). Solo tiene efecto para ADMIN y
+            TEACHER (ver descripción del endpoint). Default 1.
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: limit
+          in: query
+          required: false
+          description: >
+            Resultados por página (mínimo 1, máximo 100). Solo tiene
+            efecto para ADMIN y TEACHER. Default 20.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: sortBy
+          in: query
+          required: false
+          description: >
+            Campo de ordenación. Solo tiene efecto para ADMIN y TEACHER.
+            Default `createdAt`.
+          schema:
+            type: string
+            enum: [title, level, status, createdAt, updatedAt]
+            default: "createdAt"
+        - name: sortOrder
+          in: query
+          required: false
+          description: >
+            Dirección de ordenación. Solo tiene efecto para ADMIN y
+            TEACHER. Default `desc`.
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: "desc"
+      responses:
+        "200":
+          description: Cursos visibles para el rol del usuario autenticado.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  docs:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Course"
+                  total:
+                    type: integer
+                    example: 4
+              example:
+                docs:
+                  - _id: "662d0a1b2c3d4e5f6a7b8c9c"
+                    title: "English Unplugged"
+                    description: "Curso de nivel B1 centrado en conversación."
+                    level: "B1"
+                    status: "published"
+                    coverImageUrl: null
+                    createdAt: "2026-01-10T09:00:00.000Z"
+                    updatedAt: "2026-02-01T12:00:00.000Z"
+                total: 1
+        "400":
+          description: Algún query param no cumple el formato esperado.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "VALIDATION_ERROR"
+                message: "Datos de entrada inválidos"
+                fields:
+                  - field: "level"
+                    message: "El nivel debe ser uno de: A1, A2, B1, B2, C1, C2"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+    post:
+      tags: [Courses]
+      summary: Crear un curso
+      description: >
+        Crea un curso nuevo. El `status` se fija siempre a `draft`,
+        independientemente de lo que se envíe en el body (el campo `status`
+        ni siquiera se acepta en `createCourseSchema`).
+
+        Validaciones aplicadas:
+        - `title`, `description`, `level` obligatorios y con los límites de
+          longitud del schema (400 `VALIDATION_ERROR` si no se cumplen).
+        - `coverImageUrl` opcional; si se envía, debe ser una URL http/https
+          válida de hasta 500 caracteres.
+        - El `title` debe ser único (comparación case-insensitive) → 409
+          `COURSE_TITLE_TAKEN` si ya existe.
+
+        Solo accesible por ADMIN.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCourseInput"
+      responses:
+        "201":
+          description: Curso creado en estado `draft`.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  course:
+                    $ref: "#/components/schemas/Course"
+              example:
+                course:
+                  _id: "662d0a1b2c3d4e5f6a7b8c9c"
+                  title: "English Unplugged"
+                  description: "Curso de nivel B1 centrado en conversación."
+                  level: "B1"
+                  status: "draft"
+                  coverImageUrl: null
+                  createdAt: "2026-06-30T10:00:00.000Z"
+                  updatedAt: "2026-06-30T10:00:00.000Z"
+        "400":
+          description: Datos de entrada inválidos.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "VALIDATION_ERROR"
+                message: "Datos de entrada inválidos"
+                fields:
+                  - field: "title"
+                    message: "El título debe tener entre 3 y 100 caracteres"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/AdminOnly"
+        "409":
+          description: Ya existe un curso con ese título (case-insensitive).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "COURSE_TITLE_TAKEN"
+                message: "Ya existe un curso con ese título"
+
+  /api/courses/{id}:
+    get:
+      tags: [Courses]
+      summary: Obtener un curso por id
+      description: >
+        Devuelve el curso indicado.
+
+        Restricciones de autorización:
+        - ADMIN puede ver cualquier curso, en cualquier `status`.
+        - TEACHER o STUDENT que intenten ver un curso que no esté
+          `published` reciben 403 `COURSE_NOT_PUBLISHED`.
+        - STUDENT, además, debe tener una Enrollment para ese curso; si no
+          la tiene, 403 `NOT_ENROLLED` (esta comprobación solo se aplica
+          después de pasar la comprobación de `published` anterior).
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/courseId"
+      responses:
+        "200":
+          description: Curso encontrado.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  course:
+                    $ref: "#/components/schemas/Course"
+        "400":
+          description: El id proporcionado no es un ObjectId de MongoDB válido.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "VALIDATION_ERROR"
+                message: "Datos de entrada inválidos"
+                fields:
+                  - field: "id"
+                    message: "El id debe ser un ObjectId de MongoDB válido"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: >
+            El curso no está `published` (TEACHER/STUDENT), o el STUDENT no
+            tiene matrícula en él.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                notPublished:
+                  summary: Curso no publicado, rol distinto de ADMIN
+                  value:
+                    error: "COURSE_NOT_PUBLISHED"
+                    message: "El curso no está disponible"
+                notEnrolled:
+                  summary: Student sin matrícula en el curso
+                  value:
+                    error: "NOT_ENROLLED"
+                    message: "No tienes matrícula activa en este curso"
+        "404":
+          description: No existe ningún curso con ese id.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "COURSE_NOT_FOUND"
+                message: "Curso no encontrado"
+
+    patch:
+      tags: [Courses]
+      summary: Actualizar contenido de un curso
+      description: >
+        Actualiza campos de contenido del curso (`title`, `description`,
+        `level`, `coverImageUrl`). Todos los campos son opcionales, pero el
+        body no puede estar vacío de forma efectiva (`updateCourseSchema`
+        no impone "al menos un campo" como regla express-validator
+        explícita; un body `{}` simplemente no modifica nada).
+
+        El campo `status` está explícitamente **prohibido** en el body
+        (`body('status').not().exists()`): si se envía, se rechaza con 400,
+        cualquiera que sea su valor. El cambio de estado solo puede hacerse
+        a través de `/publish` o `/archive`.
+
+        Si se cambia `title`, debe seguir siendo único (case-insensitive,
+        excluyendo el propio curso) → 409 `COURSE_TITLE_TAKEN` si colisiona.
+
+        Solo accesible por ADMIN.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/courseId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateCourseInput"
+      responses:
+        "200":
+          description: Curso actualizado.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  course:
+                    $ref: "#/components/schemas/Course"
+        "400":
+          description: >
+            Datos de entrada inválidos, id no es un ObjectId válido, o se
+            incluyó el campo `status` en el body.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                statusForbidden:
+                  summary: Se intentó cambiar status directamente
+                  value:
+                    error: "VALIDATION_ERROR"
+                    message: "Datos de entrada inválidos"
+                    fields:
+                      - field: "status"
+                        message: "Usa los endpoints /publish o /archive para cambiar el estado del curso"
+                validationError:
+                  summary: Campo de contenido inválido
+                  value:
+                    error: "VALIDATION_ERROR"
+                    message: "Datos de entrada inválidos"
+                    fields:
+                      - field: "title"
+                        message: "El título debe tener entre 3 y 100 caracteres"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/AdminOnly"
+        "404":
+          description: No existe ningún curso con ese id.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "COURSE_NOT_FOUND"
+                message: "Curso no encontrado"
+        "409":
+          description: Ya existe otro curso con ese título (case-insensitive).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "COURSE_TITLE_TAKEN"
+                message: "Ya existe un curso con ese título"
+
+  /api/courses/{id}/publish:
+    patch:
+      tags: [Courses]
+      summary: Publicar un curso
+      description: >
+        Transiciona el curso de `draft` a `published`.
+
+        Precondiciones (en orden):
+        1. El curso debe estar en `draft` → 409 `INVALID_STATUS_TRANSITION`
+           si no lo está (incluye el caso de intentar publicar un curso ya
+           `published` o `archived`).
+        2. El curso debe tener al menos una unidad (`UnitRepository.count`)
+           → 422 `COURSE_REQUIRES_UNIT` si tiene cero unidades.
+
+        **Nota sobre el contrato real:** el código actual de
+        `publishCourse` **no comprueba que cada unidad tenga al menos una
+        lección** — solo valida `unitCount === 0`. Un curso con una unidad
+        sin lecciones puede publicarse sin error.
+
+        Solo accesible por ADMIN.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/courseId"
+      responses:
+        "200":
+          description: Curso publicado.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  course:
+                    $ref: "#/components/schemas/Course"
+              example:
+                course:
+                  _id: "662d0a1b2c3d4e5f6a7b8c9c"
+                  title: "English Unplugged"
+                  description: "Curso de nivel B1 centrado en conversación."
+                  level: "B1"
+                  status: "published"
+                  coverImageUrl: null
+                  createdAt: "2026-01-10T09:00:00.000Z"
+                  updatedAt: "2026-06-30T10:05:00.000Z"
+        "400":
+          description: El id proporcionado no es un ObjectId de MongoDB válido.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "VALIDATION_ERROR"
+                message: "Datos de entrada inválidos"
+                fields:
+                  - field: "id"
+                    message: "El id debe ser un ObjectId de MongoDB válido"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/AdminOnly"
+        "404":
+          description: No existe ningún curso con ese id.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "COURSE_NOT_FOUND"
+                message: "Curso no encontrado"
+        "409":
+          description: El curso no está en estado `draft`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "INVALID_STATUS_TRANSITION"
+                message: "No se puede publicar un curso en estado 'published'"
+        "422":
+          description: El curso no tiene ninguna unidad.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "COURSE_REQUIRES_UNIT"
+                message: "El curso debe tener al menos una unidad"
+
+  /api/courses/{id}/archive:
+    patch:
+      tags: [Courses]
+      summary: Archivar un curso
+      description: >
+        Transiciona el curso de `published` a `archived`. Si el curso no
+        está actualmente en `published` (sigue en `draft`, o ya está
+        `archived`), se rechaza con 409 `INVALID_STATUS_TRANSITION`.
+
+        Solo accesible por ADMIN.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/courseId"
+      responses:
+        "200":
+          description: Curso archivado.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  course:
+                    $ref: "#/components/schemas/Course"
+              example:
+                course:
+                  _id: "662d0a1b2c3d4e5f6a7b8c9c"
+                  title: "English Unplugged"
+                  description: "Curso de nivel B1 centrado en conversación."
+                  level: "B1"
+                  status: "archived"
+                  coverImageUrl: null
+                  createdAt: "2026-01-10T09:00:00.000Z"
+                  updatedAt: "2026-06-30T10:10:00.000Z"
+        "400":
+          description: El id proporcionado no es un ObjectId de MongoDB válido.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "VALIDATION_ERROR"
+                message: "Datos de entrada inválidos"
+                fields:
+                  - field: "id"
+                    message: "El id debe ser un ObjectId de MongoDB válido"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/AdminOnly"
+        "404":
+          description: No existe ningún curso con ese id.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "COURSE_NOT_FOUND"
+                message: "Curso no encontrado"
+        "409":
+          description: El curso no está en estado `published`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "INVALID_STATUS_TRANSITION"
+                message: "No se puede archivar un curso en estado 'draft'"
+
+components:
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    courseId:
+      name: id
+      in: path
+      required: true
+      description: ObjectId del Course.
+      schema:
+        type: string
+        example: "662d0a1b2c3d4e5f6a7b8c9c"
+
+  responses:
+    Unauthorized:
+      description: Token de autenticación ausente o inválido.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: "TOKEN_MISSING"
+            message: "Token de autenticación requerido"
+    AdminOnly:
+      description: El rol del usuario autenticado no es ADMIN.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: "INSUFFICIENT_ROLE"
+            message: "No tienes permiso para realizar esta acción"
+
+  schemas:
+    Course:
+      type: object
+      properties:
+        _id:
+          type: string
+          example: "662d0a1b2c3d4e5f6a7b8c9c"
+        title:
+          type: string
+          example: "English Unplugged"
+        description:
+          type: string
+          example: "Curso de nivel B1 centrado en conversación."
+        level:
+          type: string
+          enum: [A1, A2, B1, B2, C1, C2]
+          example: "B1"
+        status:
+          type: string
+          enum: [draft, published, archived]
+          example: "draft"
+        coverImageUrl:
+          type: string
+          nullable: true
+          example: null
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    CreateCourseInput:
+      type: object
+      required: [title, description, level]
+      properties:
+        title:
+          type: string
+          minLength: 3
+          maxLength: 100
+          example: "English Unplugged"
+        description:
+          type: string
+          minLength: 10
+          maxLength: 2000
+          example: "Curso de nivel B1 centrado en conversación."
+        level:
+          type: string
+          enum: [A1, A2, B1, B2, C1, C2]
+          example: "B1"
+        coverImageUrl:
+          type: string
+          nullable: true
+          maxLength: 500
+          description: URL http(s) válida. Opcional.
+          example: "https://cdn.example.com/courses/b1-cover.jpg"
+
+    UpdateCourseInput:
+      type: object
+      description: >
+        Todos los campos son opcionales. El campo `status` no está
+        permitido (se rechaza con 400 si se incluye).
+      properties:
+        title:
+          type: string
+          minLength: 3
+          maxLength: 100
+          example: "English Unplugged (revisado)"
+        description:
+          type: string
+          minLength: 10
+          maxLength: 2000
+          example: "Curso de nivel B1 centrado en conversación, edición revisada."
+        level:
+          type: string
+          enum: [A1, A2, B1, B2, C1, C2]
+          example: "B1"
+        coverImageUrl:
+          type: string
+          nullable: true
+          maxLength: 500
+          example: "https://cdn.example.com/courses/b1-cover-v2.jpg"
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+          example: "COURSE_NOT_FOUND"
+        message:
+          type: string
+          example: "Curso no encontrado"
+        fields:
+          type: array
+          items:
+            type: object
+            properties:
+              field:
+                type: string
+              message:
+                type: string

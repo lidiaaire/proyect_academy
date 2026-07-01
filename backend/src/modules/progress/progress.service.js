@@ -35,10 +35,12 @@
  *     → Para cada una calcula CourseOverviewItem con overallProgress
  *
  *   getStudentCourseProgress(actorRole, actorId, studentId, courseId)
- *     → Mismo que getCourseProgress pero con verificación de scope para Teacher
+ *     → Mismo que getCourseProgress. Student solo accede a su propio progreso;
+ *       Teacher solo accede a alumnos de su cohorte (validateTeacherScope)
  *
  *   getStudentOverview(actorRole, actorId, studentId)
- *     → Mismo que getProgressOverview pero con verificación de scope para Teacher
+ *     → Mismo que getProgressOverview. Student solo accede a su propio progreso;
+ *       Teacher solo accede a alumnos de su cohorte (validateTeacherScope)
  */
 
 const LessonProgressRepository    = require('../../repositories/lessonProgress.repository');
@@ -53,6 +55,9 @@ const {
   NotFoundError,
   ForbiddenError,
 } = require('../../utils/ApiError');
+const achievementService    = require('../achievements/achievement.service');
+const certificateService    = require('../certificates/certificate.service');
+const validateTeacherScope  = require('../../utils/validateTeacherScope');
 
 // Llamado por EnrollmentService al crear matrícula.
 // studentId se pasa explícitamente porque el Enrollment model puede ser stub.
@@ -119,6 +124,26 @@ const assertLessonUnlocked = async (studentId, progress) => {
   }
 };
 
+// Calcula cuántos días consecutivos (incluyendo hoy) tiene el estudiante
+// con al menos una lección completada. Usa fechas UTC para consistencia.
+const _calcStreak = (completedDocs) => {
+  const dateSet = new Set(
+    completedDocs.map((d) => new Date(d.completedAt).toISOString().slice(0, 10))
+  );
+  const today = new Date();
+  let streak = 0;
+  for (let i = 0; i < 365; i++) {
+    const day = new Date(today);
+    day.setUTCDate(day.getUTCDate() - i);
+    if (dateSet.has(day.toISOString().slice(0, 10))) {
+      streak++;
+    } else {
+      break;
+    }
+  }
+  return streak;
+};
+
 const completeLesson = async (studentId, lessonId) => {
   const progress = await LessonProgressRepository.findByStudentAndLesson(studentId, lessonId);
   if (!progress) throw new NotFoundError('PROGRESS_NOT_FOUND', 'Progreso de lección no encontrado');
@@ -141,6 +166,26 @@ const completeLesson = async (studentId, lessonId) => {
   if (courseSnapshot.overallProgress === 100) {
     const EnrollmentService = require('../enrollments/enrollment.service');
     await EnrollmentService.markCompleted(enrollment._id);
+  }
+
+  await achievementService.unlockAchievement(studentId, 'first_lesson_completed');
+
+  const totalCompleted = await LessonProgressRepository.countCompletedByStudent(studentId);
+  if (totalCompleted === 5)  await achievementService.unlockAchievement(studentId, 'five_lessons_completed');
+  if (totalCompleted === 10) await achievementService.unlockAchievement(studentId, 'ten_lessons_completed');
+
+  if (unitSnapshot.progress === 100) {
+    await achievementService.unlockAchievement(studentId, 'first_unit_completed');
+  }
+
+  if (courseSnapshot.overallProgress === 100) {
+    await achievementService.unlockAchievement(studentId, 'first_course_completed');
+    await certificateService.issueCertificate(studentId, progress.courseId, courseSnapshot.overallProgress);
+  }
+
+  const completedDates = await LessonProgressRepository.findCompletedDatesByStudent(studentId);
+  if (_calcStreak(completedDates) === 7) {
+    await achievementService.unlockAchievement(studentId, 'seven_day_streak');
   }
 
   return { completed: true, alreadyCompleted: false, progress: updated, courseSnapshot, unitSnapshot };
@@ -203,12 +248,18 @@ const getStudentCourseProgress = async (actorRole, actorId, studentId, courseId)
   if (actorRole === ROLES.STUDENT && actorId.toString() !== studentId.toString()) {
     throw new ForbiddenError('FORBIDDEN', 'Solo puedes consultar tu propio progreso');
   }
+  if (actorRole === ROLES.TEACHER) {
+    await validateTeacherScope(actorId, studentId);
+  }
   return getCourseProgress(studentId, courseId);
 };
 
 const getStudentOverview = async (actorRole, actorId, studentId) => {
   if (actorRole === ROLES.STUDENT && actorId.toString() !== studentId.toString()) {
     throw new ForbiddenError('FORBIDDEN', 'Solo puedes consultar tu propio progreso');
+  }
+  if (actorRole === ROLES.TEACHER) {
+    await validateTeacherScope(actorId, studentId);
   }
   return getProgressOverview(studentId);
 };

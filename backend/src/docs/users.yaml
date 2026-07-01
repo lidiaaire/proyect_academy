@@ -1,0 +1,831 @@
+openapi: 3.0.3
+
+info:
+  title: Elevate Your English — Users API
+  version: 1.0.0
+
+tags:
+  - name: Users
+    description: >
+      Gestión de usuarios (creación, consulta, actualización de perfil y
+      gestión de estado activo/inactivo). Montado bajo `/api/users`.
+      Todos los endpoints requieren JWT válido (`router.use(verifyToken)`).
+
+paths:
+
+  /api/users:
+    get:
+      tags: [Users]
+      summary: Listar usuarios
+      description: >
+        El resultado y el scope dependen del rol del usuario autenticado:
+
+        - **ADMIN**: todos los usuarios, filtrables por `role`, `isActive`
+          y `assignedTeacherId`. Paginación completa respetando
+          `page`/`limit`/`sortBy`/`sortOrder`.
+        - **TEACHER**: exclusivamente sus alumnos activos
+          (`role: student, assignedTeacherId: <teacherId>, isActive: true`).
+          Los filtros del request se **ignoran por completo** para este rol
+          — el scope está fijado en el service para prevenir acceso a datos
+          ajenos.
+
+        La respuesta incluye metadatos de paginación completos
+        (`total`, `page`, `limit`, `totalPages`, `hasNext`, `hasPrev`).
+        Este módulo es el único de la API que devuelve paginación completa;
+        el resto solo devuelven `{ docs, total }`.
+
+        **`isActive` como query param:** el sanitizador convierte la
+        cadena `"true"` a `true` y cualquier otro valor a `false`. Para
+        filtrar usuarios inactivos enviar `?isActive=false`; para activos
+        `?isActive=true`. Un valor ausente no aplica el filtro (todos).
+
+        Solo accesible por ADMIN o TEACHER.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: role
+          in: query
+          required: false
+          description: Filtra por rol. Solo tiene efecto para ADMIN.
+          schema:
+            type: string
+            enum: [admin, teacher, student]
+        - name: isActive
+          in: query
+          required: false
+          description: >
+            Filtra por estado de cuenta. Acepta la cadena `"true"` o
+            `"false"`. Solo tiene efecto para ADMIN.
+          schema:
+            type: string
+            enum: ["true", "false"]
+        - name: assignedTeacherId
+          in: query
+          required: false
+          description: >
+            Filtra por ObjectId del profesor asignado. Solo tiene efecto
+            para ADMIN. Debe ser un ObjectId válido.
+          schema:
+            type: string
+            example: "663e0a1b2c3d4e5f6a7b8c9e"
+        - name: page
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: sortBy
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [firstName, lastName, email, role, isActive, createdAt, updatedAt, lastLoginAt]
+            default: "createdAt"
+        - name: sortOrder
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: "desc"
+      responses:
+        "200":
+          description: Lista de usuarios con metadatos de paginación completos.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserListResult"
+              example:
+                users:
+                  - _id: "663e0a1b2c3d4e5f6a7b8c9d"
+                    firstName: "Student"
+                    lastName: "Test"
+                    email: "student@test.com"
+                    role: "student"
+                    isActive: true
+                    avatarUrl: null
+                    assignedTeacherId: "663e0a1b2c3d4e5f6a7b8c9e"
+                    lastLoginAt: null
+                    achievementPoints: 0
+                    createdAt: "2026-01-01T00:00:00.000Z"
+                    updatedAt: "2026-01-01T00:00:00.000Z"
+                pagination:
+                  total: 1
+                  page: 1
+                  limit: 20
+                  totalPages: 1
+                  hasNext: false
+                  hasPrev: false
+        "400":
+          description: Algún query param no cumple el formato esperado.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "VALIDATION_ERROR"
+                message: "Datos de entrada inválidos"
+                fields:
+                  - field: "role"
+                    message: "El rol debe ser uno de: admin, teacher, student"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/AdminOrTeacherOnly"
+
+    post:
+      tags: [Users]
+      summary: Crear un usuario
+      description: >
+        Crea un nuevo usuario con contraseña hasheada (bcrypt, 10 rondas).
+        El campo `passwordHash` está explícitamente bloqueado en el body
+        (400 si se envía).
+
+        El controller hace destructuring explícito del body: solo llegan al
+        service `firstName`, `lastName`, `email`, `password`, `role`,
+        `assignedTeacherId` y `avatarUrl`.
+
+        Como efecto secundario se desbloquea el logro `welcome_to_elevate`
+        para el usuario creado.
+
+        La respuesta re-consulta el usuario con `findById` para excluir
+        `passwordHash` del resultado (`select: false`).
+
+        Validaciones de negocio (en orden):
+        1. `email` único → 409 `EMAIL_ALREADY_EXISTS`.
+        2. `assignedTeacherId` solo permitido para `role: student` → 422
+           `ASSIGNED_TEACHER_ONLY_FOR_STUDENTS`.
+        3. Si `assignedTeacherId` presente: el usuario referenciado debe
+           existir, tener `role: teacher` y estar activo → 404
+           `TEACHER_NOT_FOUND` / 422 `INVALID_TEACHER_ROLE` / 422
+           `TEACHER_INACTIVE`.
+
+        Requiere `requireActiveUser` (actor activo) y solo ADMIN.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateUserInput"
+            example:
+              firstName: "Jane"
+              lastName: "Doe"
+              email: "jane.doe@example.com"
+              password: "Secure2024!"
+              role: "student"
+              assignedTeacherId: "663e0a1b2c3d4e5f6a7b8c9e"
+      responses:
+        "201":
+          description: Usuario creado.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user:
+                    $ref: "#/components/schemas/User"
+        "400":
+          description: Datos de entrada inválidos.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                campoAusente:
+                  summary: Campo requerido ausente
+                  value:
+                    error: "VALIDATION_ERROR"
+                    message: "Datos de entrada inválidos"
+                    fields:
+                      - field: "email"
+                        message: "El email es obligatorio"
+                passwordHashBloqueado:
+                  summary: Se envió passwordHash en el body
+                  value:
+                    error: "VALIDATION_ERROR"
+                    message: "Datos de entrada inválidos"
+                    fields:
+                      - field: "passwordHash"
+                        message: "El campo passwordHash no está permitido"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Rol no es ADMIN, o la cuenta del admin está desactivada.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                insufficientRole:
+                  summary: Rol no es ADMIN
+                  value:
+                    error: "INSUFFICIENT_ROLE"
+                    message: "No tienes permiso para realizar esta acción"
+                accountInactive:
+                  summary: Cuenta del admin desactivada
+                  value:
+                    error: "ACCOUNT_INACTIVE"
+                    message: "La cuenta está desactivada"
+        "404":
+          description: El `assignedTeacherId` no existe en BD.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "TEACHER_NOT_FOUND"
+                message: "El profesor asignado no existe"
+        "409":
+          description: El email ya está registrado en el sistema.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "EMAIL_ALREADY_EXISTS"
+                message: "El email jane.doe@example.com ya está registrado"
+        "422":
+          description: >
+            `assignedTeacherId` enviado para un rol distinto de `student`,
+            o el usuario referenciado no tiene `role: teacher`, o está
+            inactivo.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                onlyForStudents:
+                  summary: assignedTeacherId para rol no-student
+                  value:
+                    error: "ASSIGNED_TEACHER_ONLY_FOR_STUDENTS"
+                    message: "Solo se puede asignar un profesor a usuarios con rol student"
+                invalidRole:
+                  summary: El usuario referenciado no es teacher
+                  value:
+                    error: "INVALID_TEACHER_ROLE"
+                    message: "El usuario asignado no tiene rol de profesor"
+                teacherInactive:
+                  summary: El teacher referenciado está inactivo
+                  value:
+                    error: "TEACHER_INACTIVE"
+                    message: "El profesor asignado está inactivo"
+
+  /api/users/{id}:
+    get:
+      tags: [Users]
+      summary: Obtener un usuario por id
+      description: >
+        Devuelve el documento completo del usuario indicado (sin
+        `passwordHash`), incluyendo usuarios inactivos.
+
+        Accesible por ADMIN y TEACHER. **Limitación conocida del MVP:**
+        TEACHER puede consultar cualquier perfil de la plataforma, no solo
+        los alumnos de su cohorte. La restricción relacional está fuera del
+        alcance de esta versión.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/userId"
+      responses:
+        "200":
+          description: Usuario encontrado.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user:
+                    $ref: "#/components/schemas/User"
+        "400":
+          $ref: "#/components/responses/InvalidId"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/AdminOrTeacherOnly"
+        "404":
+          $ref: "#/components/responses/UserNotFound"
+
+    patch:
+      tags: [Users]
+      summary: Actualizar perfil de un usuario
+      description: >
+        Actualiza campos de perfil: `firstName`, `lastName`, `email`,
+        `avatarUrl`, `assignedTeacherId`. Todos opcionales.
+
+        Campos **no actualizables** por esta ruta (rechazados con 400 si
+        se envían):
+        - `password` → usar `PATCH /api/auth/change-password`.
+        - `passwordHash` → siempre bloqueado.
+
+        Campos **inmutables** tras la creación (rechazados con 422):
+        - `role` → `ROLE_IS_IMMUTABLE` si se incluye en el body (el
+          validator ya lo bloquea con 400; el service también lo rechaza
+          por si llegara a través de otra vía con 422).
+
+        Si se envía `email`, debe ser único (case-insensitive, excluyendo
+        el propio usuario) → 409 `EMAIL_ALREADY_EXISTS`.
+
+        Si se envía `assignedTeacherId`:
+        - El usuario objetivo debe tener `role: student` → 422.
+        - `null` es válido (desasigna al profesor).
+        - Un ObjectId debe referenciar un teacher existente y activo → 404
+          / 422.
+
+        Efecto secundario: si tras la actualización el usuario tiene
+        `firstName`, `lastName` y `avatarUrl` no nulos, se desbloquea el
+        logro `profile_completed`.
+
+        Requiere `requireActiveUser` y solo ADMIN.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/userId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateUserInput"
+            example:
+              firstName: "Janet"
+              assignedTeacherId: null
+      responses:
+        "200":
+          description: Usuario actualizado.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user:
+                    $ref: "#/components/schemas/User"
+        "400":
+          description: "`id` inválido, datos de entrada inválidos, o se incluyó `password`/`passwordHash`."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "VALIDATION_ERROR"
+                message: "Datos de entrada inválidos"
+                fields:
+                  - field: "password"
+                    message: "Usa el endpoint PATCH /auth/change-password para cambiar la contraseña"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Rol no es ADMIN, o cuenta del admin desactivada.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                insufficientRole:
+                  summary: Rol no es ADMIN
+                  value:
+                    error: "INSUFFICIENT_ROLE"
+                    message: "No tienes permiso para realizar esta acción"
+                accountInactive:
+                  summary: Cuenta del admin desactivada
+                  value:
+                    error: "ACCOUNT_INACTIVE"
+                    message: "La cuenta está desactivada"
+        "404":
+          description: Usuario objetivo no encontrado, o `assignedTeacherId` no existe.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                userNotFound:
+                  summary: Usuario no encontrado
+                  value:
+                    error: "USER_NOT_FOUND"
+                    message: "El usuario no existe"
+                teacherNotFound:
+                  summary: Profesor referenciado no existe
+                  value:
+                    error: "TEACHER_NOT_FOUND"
+                    message: "El profesor asignado no existe"
+        "409":
+          description: El email ya está registrado por otro usuario.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "EMAIL_ALREADY_EXISTS"
+                message: "El email jane.doe@example.com ya está registrado"
+        "422":
+          description: >
+            `assignedTeacherId` enviado para un usuario que no es student,
+            o el teacher referenciado tiene rol o estado incorrecto.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                onlyForStudents:
+                  summary: assignedTeacherId para rol no-student
+                  value:
+                    error: "ASSIGNED_TEACHER_ONLY_FOR_STUDENTS"
+                    message: "Solo se puede asignar un profesor a usuarios con rol student"
+                invalidTeacherRole:
+                  summary: El usuario referenciado no es teacher
+                  value:
+                    error: "INVALID_TEACHER_ROLE"
+                    message: "El usuario asignado no tiene rol de profesor"
+                teacherInactive:
+                  summary: El teacher referenciado está inactivo
+                  value:
+                    error: "TEACHER_INACTIVE"
+                    message: "El profesor asignado está inactivo"
+
+  /api/users/{id}/activate:
+    patch:
+      tags: [Users]
+      summary: Activar una cuenta de usuario
+      description: >
+        Establece `isActive: true` en el usuario indicado. Si ya estaba
+        activo, la operación es **idempotente** — devuelve el documento sin
+        modificación (200, sin error).
+
+        Sin body.
+
+        Requiere `requireActiveUser` y solo ADMIN.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/userId"
+      responses:
+        "200":
+          description: Usuario activado (o ya estaba activo).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user:
+                    $ref: "#/components/schemas/User"
+        "400":
+          $ref: "#/components/responses/InvalidId"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Rol no es ADMIN, o cuenta del admin desactivada.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                insufficientRole:
+                  summary: Rol no es ADMIN
+                  value:
+                    error: "INSUFFICIENT_ROLE"
+                    message: "No tienes permiso para realizar esta acción"
+                accountInactive:
+                  summary: Cuenta del admin desactivada
+                  value:
+                    error: "ACCOUNT_INACTIVE"
+                    message: "La cuenta está desactivada"
+        "404":
+          $ref: "#/components/responses/UserNotFound"
+
+  /api/users/{id}/deactivate:
+    patch:
+      tags: [Users]
+      summary: Desactivar una cuenta de usuario
+      description: >
+        Establece `isActive: false` en el usuario indicado. Si ya estaba
+        inactivo, la operación es **idempotente** — devuelve el documento
+        sin modificación (200, sin error).
+
+        Sin body.
+
+        **Dos protecciones no bypasseables:**
+        1. Un admin no puede desactivarse a sí mismo → 403
+           `CANNOT_DEACTIVATE_SELF`. El `currentUserId` se extrae de
+           `req.user.userId` (JWT), nunca del body.
+        2. El último administrador activo del sistema no puede desactivarse
+           → 403 `LAST_ADMIN_PROTECTION`.
+
+        **Limitación conocida del MVP:** si el usuario desactivado es un
+        TEACHER, sus alumnos asignados quedan con `assignedTeacherId`
+        apuntando a un usuario inactivo. El admin deberá reasignarlos
+        manualmente; no hay cascade en esta versión.
+
+        Requiere `requireActiveUser` y solo ADMIN.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/userId"
+      responses:
+        "200":
+          description: Usuario desactivado (o ya estaba inactivo).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user:
+                    $ref: "#/components/schemas/User"
+        "400":
+          $ref: "#/components/responses/InvalidId"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: >
+            Rol no es ADMIN; cuenta del admin desactivada; el admin intenta
+            desactivarse a sí mismo; o es el último admin activo.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                insufficientRole:
+                  summary: Rol no es ADMIN
+                  value:
+                    error: "INSUFFICIENT_ROLE"
+                    message: "No tienes permiso para realizar esta acción"
+                accountInactive:
+                  summary: Cuenta del admin desactivada
+                  value:
+                    error: "ACCOUNT_INACTIVE"
+                    message: "La cuenta está desactivada"
+                cannotDeactivateSelf:
+                  summary: El admin intenta desactivarse a sí mismo
+                  value:
+                    error: "CANNOT_DEACTIVATE_SELF"
+                    message: "No puedes desactivar tu propia cuenta"
+                lastAdminProtection:
+                  summary: Único administrador activo del sistema
+                  value:
+                    error: "LAST_ADMIN_PROTECTION"
+                    message: "No se puede desactivar el único administrador activo del sistema"
+        "404":
+          $ref: "#/components/responses/UserNotFound"
+
+components:
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    userId:
+      name: id
+      in: path
+      required: true
+      description: ObjectId del User.
+      schema:
+        type: string
+        example: "663e0a1b2c3d4e5f6a7b8c9d"
+
+  responses:
+    Unauthorized:
+      description: Token ausente, expirado o inválido.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          examples:
+            tokenMissing:
+              summary: Sin token
+              value:
+                error: "TOKEN_MISSING"
+                message: "Token de autenticación requerido"
+            tokenExpired:
+              summary: Token caducado
+              value:
+                error: "TOKEN_EXPIRED"
+                message: "El token ha expirado"
+            tokenInvalid:
+              summary: Token malformado
+              value:
+                error: "TOKEN_INVALID"
+                message: "Token inválido"
+    AdminOrTeacherOnly:
+      description: El rol del usuario autenticado no es ADMIN ni TEACHER.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: "INSUFFICIENT_ROLE"
+            message: "No tienes permiso para realizar esta acción"
+    InvalidId:
+      description: El `id` de ruta no es un ObjectId de MongoDB válido.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: "VALIDATION_ERROR"
+            message: "Datos de entrada inválidos"
+            fields:
+              - field: "id"
+                message: "El id debe ser un ObjectId de MongoDB válido"
+    UserNotFound:
+      description: No existe ningún usuario con ese id.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: "USER_NOT_FOUND"
+            message: "El usuario no existe"
+
+  schemas:
+    User:
+      type: object
+      description: "Documento User completo. `passwordHash` nunca se incluye (`select: false`)."
+      properties:
+        _id:
+          type: string
+          example: "663e0a1b2c3d4e5f6a7b8c9d"
+        firstName:
+          type: string
+          example: "Jane"
+        lastName:
+          type: string
+          example: "Doe"
+        email:
+          type: string
+          format: email
+          example: "jane.doe@example.com"
+        role:
+          type: string
+          enum: [admin, teacher, student]
+          description: Inmutable tras la creación.
+          example: "student"
+        isActive:
+          type: boolean
+          example: true
+        avatarUrl:
+          type: string
+          nullable: true
+          example: null
+        assignedTeacherId:
+          type: string
+          nullable: true
+          description: "Solo relevante para `role: student`."
+          example: "663e0a1b2c3d4e5f6a7b8c9e"
+        lastLoginAt:
+          type: string
+          format: date-time
+          nullable: true
+          example: null
+        achievementPoints:
+          type: integer
+          minimum: 0
+          example: 0
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    CreateUserInput:
+      type: object
+      required: [firstName, lastName, email, password, role]
+      properties:
+        firstName:
+          type: string
+          minLength: 2
+          maxLength: 50
+          example: "Jane"
+        lastName:
+          type: string
+          minLength: 2
+          maxLength: 50
+          example: "Doe"
+        email:
+          type: string
+          format: email
+          example: "jane.doe@example.com"
+        password:
+          type: string
+          minLength: 8
+          maxLength: 72
+          description: Mínimo 8 caracteres, máximo 72, al menos una mayúscula y un número.
+          example: "Secure2024!"
+        role:
+          type: string
+          enum: [admin, teacher, student]
+          example: "student"
+        assignedTeacherId:
+          type: string
+          nullable: true
+          description: "Solo permitido cuando `role: student`."
+          example: "663e0a1b2c3d4e5f6a7b8c9e"
+        avatarUrl:
+          type: string
+          nullable: true
+          maxLength: 500
+          description: URL http(s) válida. Opcional.
+          example: null
+
+    UpdateUserInput:
+      type: object
+      description: >
+        Todos los campos son opcionales. `role`, `password` y `passwordHash`
+        no están permitidos. `assignedTeacherId: null` desasigna al profesor.
+      properties:
+        firstName:
+          type: string
+          minLength: 2
+          maxLength: 50
+          example: "Janet"
+        lastName:
+          type: string
+          minLength: 2
+          maxLength: 50
+          example: "Doe"
+        email:
+          type: string
+          format: email
+          example: "janet.doe@example.com"
+        avatarUrl:
+          type: string
+          nullable: true
+          maxLength: 500
+          example: "https://cdn.example.com/avatars/jane.jpg"
+        assignedTeacherId:
+          type: string
+          nullable: true
+          description: >
+            Solo permitido para usuarios `role: student`. `null` desasigna
+            al profesor actual.
+          example: null
+
+    UserListResult:
+      type: object
+      properties:
+        users:
+          type: array
+          items:
+            $ref: "#/components/schemas/User"
+        pagination:
+          $ref: "#/components/schemas/Pagination"
+
+    Pagination:
+      type: object
+      description: >
+        Metadatos de paginación calculados por `buildPagination(total, page,
+        limit)`. Este módulo es el único de la API que devuelve paginación
+        completa — el resto solo devuelven `{ docs, total }`.
+      properties:
+        total:
+          type: integer
+          description: Total de documentos que coinciden con el filtro.
+          example: 42
+        page:
+          type: integer
+          description: Página actual solicitada.
+          example: 1
+        limit:
+          type: integer
+          description: Resultados por página aplicados efectivamente.
+          example: 20
+        totalPages:
+          type: integer
+          example: 3
+        hasNext:
+          type: boolean
+          example: true
+        hasPrev:
+          type: boolean
+          example: false
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+          example: "USER_NOT_FOUND"
+        message:
+          type: string
+          example: "El usuario no existe"
+        fields:
+          type: array
+          items:
+            type: object
+            properties:
+              field:
+                type: string
+              message:
+                type: string

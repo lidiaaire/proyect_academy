@@ -1,0 +1,663 @@
+openapi: 3.0.3
+
+info:
+  title: Elevate Your English — Units API
+  version: 1.0.0
+
+tags:
+  - name: Units
+    description: >
+      Gestión de unidades (Unit) dentro de un curso. Montado bajo
+      `/api/courses/:courseId/units` (mergeParams). Las rutas anidadas
+      `/:unitId/lessons` y `/:unitId/assessment` pertenecen a los módulos
+      Lessons y Assessments y no se documentan en este archivo.
+
+paths:
+
+  /api/courses/{courseId}/units:
+    get:
+      tags: [Units]
+      summary: Listar unidades de un curso
+      description: >
+        Devuelve las unidades del curso indicado, ordenadas por `order`
+        ascendente, como `{ docs, total }` (sin metadatos de paginación —
+        `UnitRepository.findByCourseId` aplica `skip`/`limit` internos con
+        defaults `skip=0, limit=100`, pero este endpoint no expone query
+        params para controlarlos).
+
+        Restricciones de autorización (sin `requireRole`, solo
+        `verifyToken`):
+        - ADMIN puede listar las unidades de cualquier curso, sea cual sea
+          su `status`.
+        - TEACHER y STUDENT solo pueden listar unidades de un curso
+          `published` → 403 `COURSE_NOT_PUBLISHED` si no lo está.
+        - STUDENT, además, debe tener una Enrollment en ese curso → 403
+          `NOT_ENROLLED` si no la tiene.
+
+        **Nota sobre el contrato real:** el comentario de cabecera de
+        `unit.service.js` indica que `listUnits` añade `locked` y
+        `completedLessons` para STUDENT, pero el código actual devuelve los
+        documentos `Unit` tal cual, sin ningún campo calculado de progreso
+        ni bloqueo.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/courseId"
+      responses:
+        "200":
+          description: Unidades del curso.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  docs:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Unit"
+                  total:
+                    type: integer
+                    example: 2
+              example:
+                docs:
+                  - _id: "665b1a2b3c4d5e6f7a8b9c01"
+                    courseId: "662d0a1b2c3d4e5f6a7b8c9c"
+                    title: "Unidad 1: Introducción"
+                    description: null
+                    order: 1
+                    sequentialUnlock: true
+                    createdAt: "2026-01-10T09:05:00.000Z"
+                    updatedAt: "2026-01-10T09:05:00.000Z"
+                total: 1
+        "400":
+          description: "`courseId` no es un ObjectId de MongoDB válido."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "VALIDATION_ERROR"
+                message: "Datos de entrada inválidos"
+                fields:
+                  - field: "courseId"
+                    message: "El courseId debe ser un ObjectId de MongoDB válido"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: >
+            El curso no está `published` (TEACHER/STUDENT), o el STUDENT
+            no tiene matrícula en él.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                notPublished:
+                  summary: Curso no publicado, rol distinto de ADMIN
+                  value:
+                    error: "COURSE_NOT_PUBLISHED"
+                    message: "El curso no está disponible"
+                notEnrolled:
+                  summary: Student sin matrícula en el curso
+                  value:
+                    error: "NOT_ENROLLED"
+                    message: "No tienes matrícula activa en este curso"
+        "404":
+          description: No existe ningún curso con ese `courseId`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "COURSE_NOT_FOUND"
+                message: "Curso no encontrado"
+
+    post:
+      tags: [Units]
+      summary: Crear una unidad
+      description: >
+        Crea una unidad nueva en el curso indicado. El `order` se asigna
+        automáticamente como `maxOrder(curso) + 1` (campo `order`
+        explícitamente prohibido en el body — 400 si se envía).
+
+        Restricción de negocio real: **se permite crear unidades tanto en
+        cursos `draft` como `published`** — solo se rechaza si el curso
+        está `archived` → 403 `COURSE_ARCHIVED`. (El comentario de cabecera
+        de `unit.service.js` dice "solo en draft", pero el código solo
+        comprueba `status === ARCHIVED`.)
+
+        No hay validación de unicidad de `title` dentro del curso (a
+        diferencia de `Course.title`, que sí es único).
+
+        Solo accesible por ADMIN.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/courseId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateUnitInput"
+      responses:
+        "201":
+          description: Unidad creada.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  unit:
+                    $ref: "#/components/schemas/Unit"
+              example:
+                unit:
+                  _id: "665b1a2b3c4d5e6f7a8b9c01"
+                  courseId: "662d0a1b2c3d4e5f6a7b8c9c"
+                  title: "Unidad 1: Introducción"
+                  description: null
+                  order: 1
+                  sequentialUnlock: true
+                  createdAt: "2026-06-30T10:00:00.000Z"
+                  updatedAt: "2026-06-30T10:00:00.000Z"
+        "400":
+          description: "`courseId` inválido, o datos de entrada inválidos (incluye intentar enviar `order`)."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                validationError:
+                  summary: Campo de contenido inválido
+                  value:
+                    error: "VALIDATION_ERROR"
+                    message: "Datos de entrada inválidos"
+                    fields:
+                      - field: "title"
+                        message: "El título debe tener entre 3 y 100 caracteres"
+                orderForbidden:
+                  summary: Se intentó enviar order manualmente
+                  value:
+                    error: "VALIDATION_ERROR"
+                    message: "Datos de entrada inválidos"
+                    fields:
+                      - field: "order"
+                        message: "El campo order es asignado automáticamente por el sistema"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: El rol no es ADMIN, o el curso está `archived`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                insufficientRole:
+                  summary: Rol no permitido en la ruta
+                  value:
+                    error: "INSUFFICIENT_ROLE"
+                    message: "No tienes permiso para realizar esta acción"
+                courseArchived:
+                  summary: Curso archivado
+                  value:
+                    error: "COURSE_ARCHIVED"
+                    message: "No se pueden añadir unidades a un curso archivado"
+        "404":
+          description: No existe ningún curso con ese `courseId`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "COURSE_NOT_FOUND"
+                message: "Curso no encontrado"
+
+  /api/courses/{courseId}/units/reorder:
+    patch:
+      tags: [Units]
+      summary: Reordenar las unidades de un curso
+      description: >
+        Recalcula el `order` de todas las unidades del curso según la
+        posición de cada id en `orderedIds` (operación atómica vía
+        `bulkWrite`).
+
+        Validaciones de negocio (en orden):
+        1. `orderedIds` debe incluir **exactamente** todas las unidades del
+           curso, ni más ni menos → 422 `REORDER_INCOMPLETE` si la longitud
+           no coincide con el número real de unidades.
+        2. Todos los ids deben pertenecer a ese curso → 422
+           `REORDER_INVALID_ID` si alguno no corresponde.
+
+        No hay restricción por `status` del curso: se puede reordenar en
+        `draft`, `published` o `archived`.
+
+        Solo accesible por ADMIN. **Importante:** esta ruta se declara
+        antes que `GET/PATCH/DELETE /:id` en el router, por lo que
+        `reorder` nunca es interpretado como un `:id`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/courseId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [orderedIds]
+              properties:
+                orderedIds:
+                  type: array
+                  minItems: 1
+                  description: >
+                    Array con el ObjectId de cada unidad del curso, en el
+                    orden deseado. Debe contener exactamente todas las
+                    unidades existentes del curso.
+                  items:
+                    type: string
+                  example:
+                    - "665b1a2b3c4d5e6f7a8b9c02"
+                    - "665b1a2b3c4d5e6f7a8b9c01"
+      responses:
+        "204":
+          description: Unidades reordenadas correctamente. Sin contenido en la respuesta.
+        "400":
+          description: "`courseId` inválido, o `orderedIds` ausente/vacío/con elementos que no son ObjectId."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "VALIDATION_ERROR"
+                message: "Datos de entrada inválidos"
+                fields:
+                  - field: "orderedIds"
+                    message: "orderedIds debe ser un array no vacío"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/AdminOnly"
+        "404":
+          description: No existe ningún curso con ese `courseId`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "COURSE_NOT_FOUND"
+                message: "Curso no encontrado"
+        "422":
+          description: "`orderedIds` no coincide exactamente con las unidades del curso."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                incomplete:
+                  summary: Faltan o sobran ids respecto a las unidades reales
+                  value:
+                    error: "REORDER_INCOMPLETE"
+                    message: "orderedIds debe incluir todas las unidades del curso"
+                invalidId:
+                  summary: Algún id no pertenece a este curso
+                  value:
+                    error: "REORDER_INVALID_ID"
+                    message: "Algún id no pertenece a este curso"
+
+  /api/courses/{courseId}/units/{id}:
+    get:
+      tags: [Units]
+      summary: Obtener una unidad por id
+      description: >
+        Devuelve el documento de Unit indicado (sin lecciones anidadas: a
+        pesar de que el comentario de cabecera de `unit.service.js`
+        promete un `LessonSummary[]`, el código actual devuelve únicamente
+        el documento `Unit`).
+
+        Restricciones de autorización: idénticas a `GET
+        /api/courses/:courseId/units` (ver ese endpoint) — ADMIN sin
+        restricción; TEACHER/STUDENT requieren curso `published`; STUDENT
+        requiere además matrícula. Estas comprobaciones se hacen **antes**
+        de verificar que la unidad existe.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/courseId"
+        - $ref: "#/components/parameters/unitId"
+      responses:
+        "200":
+          description: Unidad encontrada.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  unit:
+                    $ref: "#/components/schemas/Unit"
+        "400":
+          description: "`courseId` o `id` no son un ObjectId de MongoDB válido."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "VALIDATION_ERROR"
+                message: "Datos de entrada inválidos"
+                fields:
+                  - field: "id"
+                    message: "El id debe ser un ObjectId de MongoDB válido"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: >
+            El curso no está `published` (TEACHER/STUDENT), o el STUDENT
+            no tiene matrícula en él.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                notPublished:
+                  summary: Curso no publicado, rol distinto de ADMIN
+                  value:
+                    error: "COURSE_NOT_PUBLISHED"
+                    message: "El curso no está disponible"
+                notEnrolled:
+                  summary: Student sin matrícula en el curso
+                  value:
+                    error: "NOT_ENROLLED"
+                    message: "No tienes matrícula activa en este curso"
+        "404":
+          description: No existe el curso, o no existe ninguna unidad con ese id dentro de ese curso.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                courseNotFound:
+                  summary: Curso no encontrado
+                  value:
+                    error: "COURSE_NOT_FOUND"
+                    message: "Curso no encontrado"
+                unitNotFound:
+                  summary: Unidad no encontrada (o pertenece a otro curso)
+                  value:
+                    error: "UNIT_NOT_FOUND"
+                    message: "Unidad no encontrada"
+
+    patch:
+      tags: [Units]
+      summary: Actualizar una unidad
+      description: >
+        Actualiza `title`, `description` y/o `sequentialUnlock`. Todos los
+        campos son opcionales; un body `{}` es aceptado y simplemente no
+        modifica nada (`updateUnitSchema` no exige "al menos un campo"). El
+        campo `order` está prohibido (400 si se envía).
+
+        **Sin restricción por `status` del curso**: a diferencia de
+        `create` y `delete`, `updateUnit` no comprueba en absoluto el
+        `status` del curso — se puede actualizar una unidad de un curso
+        `draft`, `published` o `archived`.
+
+        Solo accesible por ADMIN.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/courseId"
+        - $ref: "#/components/parameters/unitId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateUnitInput"
+      responses:
+        "200":
+          description: Unidad actualizada.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  unit:
+                    $ref: "#/components/schemas/Unit"
+        "400":
+          description: "`courseId`/`id` inválidos, datos de entrada inválidos, o se incluyó `order`."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "VALIDATION_ERROR"
+                message: "Datos de entrada inválidos"
+                fields:
+                  - field: "order"
+                    message: "El campo order es asignado automáticamente por el sistema"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/AdminOnly"
+        "404":
+          description: No existe el curso, o no existe ninguna unidad con ese id dentro de ese curso.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                courseNotFound:
+                  summary: Curso no encontrado
+                  value:
+                    error: "COURSE_NOT_FOUND"
+                    message: "Curso no encontrado"
+                unitNotFound:
+                  summary: Unidad no encontrada
+                  value:
+                    error: "UNIT_NOT_FOUND"
+                    message: "Unidad no encontrada"
+
+    delete:
+      tags: [Units]
+      summary: Eliminar una unidad
+      description: >
+        Elimina la unidad indicada junto con todo su contenido dependiente:
+        sus Lessons, y, si tiene un Assessment asociado, también el
+        Assessment y todos sus AssessmentAttempt.
+
+        Solo se permite si el curso está en `draft` → 403
+        `CANNOT_DELETE_UNIT` en cualquier otro estado.
+
+        Solo accesible por ADMIN.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/courseId"
+        - $ref: "#/components/parameters/unitId"
+      responses:
+        "204":
+          description: Unidad (y su contenido dependiente) eliminada. Sin contenido en la respuesta.
+        "400":
+          description: "`courseId` o `id` no son un ObjectId de MongoDB válido."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "VALIDATION_ERROR"
+                message: "Datos de entrada inválidos"
+                fields:
+                  - field: "id"
+                    message: "El id debe ser un ObjectId de MongoDB válido"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: El rol no es ADMIN, o el curso no está en estado `draft`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                insufficientRole:
+                  summary: Rol no permitido en la ruta
+                  value:
+                    error: "INSUFFICIENT_ROLE"
+                    message: "No tienes permiso para realizar esta acción"
+                cannotDelete:
+                  summary: Curso no está en draft
+                  value:
+                    error: "CANNOT_DELETE_UNIT"
+                    message: "Solo se pueden eliminar unidades de cursos en estado draft"
+        "404":
+          description: No existe el curso, o no existe ninguna unidad con ese id dentro de ese curso.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                courseNotFound:
+                  summary: Curso no encontrado
+                  value:
+                    error: "COURSE_NOT_FOUND"
+                    message: "Curso no encontrado"
+                unitNotFound:
+                  summary: Unidad no encontrada
+                  value:
+                    error: "UNIT_NOT_FOUND"
+                    message: "Unidad no encontrada"
+
+components:
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    courseId:
+      name: courseId
+      in: path
+      required: true
+      description: ObjectId del Course al que pertenecen las unidades.
+      schema:
+        type: string
+        example: "662d0a1b2c3d4e5f6a7b8c9c"
+    unitId:
+      name: id
+      in: path
+      required: true
+      description: ObjectId de la Unit.
+      schema:
+        type: string
+        example: "665b1a2b3c4d5e6f7a8b9c01"
+
+  responses:
+    Unauthorized:
+      description: Token de autenticación ausente o inválido.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: "TOKEN_MISSING"
+            message: "Token de autenticación requerido"
+    AdminOnly:
+      description: El rol del usuario autenticado no es ADMIN.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: "INSUFFICIENT_ROLE"
+            message: "No tienes permiso para realizar esta acción"
+
+  schemas:
+    Unit:
+      type: object
+      properties:
+        _id:
+          type: string
+          example: "665b1a2b3c4d5e6f7a8b9c01"
+        courseId:
+          type: string
+          example: "662d0a1b2c3d4e5f6a7b8c9c"
+        title:
+          type: string
+          example: "Unidad 1: Introducción"
+        description:
+          type: string
+          nullable: true
+          example: null
+        order:
+          type: integer
+          minimum: 1
+          description: Asignado automáticamente por el sistema (maxOrder + 1 al crear).
+          example: 1
+        sequentialUnlock:
+          type: boolean
+          description: >
+            true (default): cada lección requiere completar la anterior.
+            false: todas las lecciones de la unidad accesibles desde el
+            inicio.
+          example: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    CreateUnitInput:
+      type: object
+      required: [title]
+      properties:
+        title:
+          type: string
+          minLength: 3
+          maxLength: 100
+          example: "Unidad 1: Introducción"
+        description:
+          type: string
+          nullable: true
+          maxLength: 500
+          example: "Vocabulario y gramática básica de presentación."
+        sequentialUnlock:
+          type: boolean
+          default: true
+          example: true
+
+    UpdateUnitInput:
+      type: object
+      description: Todos los campos son opcionales. El campo `order` no está permitido.
+      properties:
+        title:
+          type: string
+          minLength: 3
+          maxLength: 100
+          example: "Unidad 1: Introducción (revisada)"
+        description:
+          type: string
+          nullable: true
+          maxLength: 500
+          example: "Vocabulario y gramática básica de presentación, edición revisada."
+        sequentialUnlock:
+          type: boolean
+          example: false
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+          example: "UNIT_NOT_FOUND"
+        message:
+          type: string
+          example: "Unidad no encontrada"
+        fields:
+          type: array
+          items:
+            type: object
+            properties:
+              field:
+                type: string
+              message:
+                type: string

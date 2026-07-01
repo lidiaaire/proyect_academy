@@ -1,14 +1,28 @@
 'use strict';
 
-// modules/availability/availability.controller.js
-// Métodos: getTemplate, replaceTemplate, getSlots
+const asyncHandler          = require('../../utils/asyncHandler');
+const AvailabilityService   = require('./availability.service');
 
-// TODO: Implementar en Phase 7
+const getMyAvailability = asyncHandler(async (req, res) => {
+  const slots = await AvailabilityService.getMyAvailability(req.user.userId);
+  const data  = slots.map(({ dayOfWeek, startTime, endTime, isActive }) => ({
+    dayOfWeek,
+    startTime,
+    endTime,
+    isActive,
+  }));
+  res.status(200).json({ availability: data });
+});
 
-const asyncHandler = require('../../utils/asyncHandler');
+const createAvailability = asyncHandler(async (req, res) => {
+  const { dayOfWeek, startTime, endTime } = req.body;
+  const slot = await AvailabilityService.createAvailability(
+    req.user.userId,
+    dayOfWeek,
+    startTime,
+    endTime,
+  );
+  res.status(201).json({ availability: slot });
+});
 
-const getTemplate     = asyncHandler(async (req, res) => { res.status(501).json({ error: 'NOT_IMPLEMENTED' }); });
-const replaceTemplate = asyncHandler(async (req, res) => { res.status(501).json({ error: 'NOT_IMPLEMENTED' }); });
-const getSlots        = asyncHandler(async (req, res) => { res.status(501).json({ error: 'NOT_IMPLEMENTED' }); });
-
-module.exports = { getTemplate, replaceTemplate, getSlots };
+module.exports = { getMyAvailability, createAvailability };

@@ -1,0 +1,440 @@
+openapi: 3.0.3
+
+info:
+  title: Elevate Your English — Assignments API
+  version: 1.0.0
+
+tags:
+  - name: Assignments
+    description: >
+      Gestión de tareas (Assignment) asociadas a una lección dentro de un
+      curso. Montado bajo `/api/assignments`.
+
+      **Características del módulo:**
+      - No existe un archivo `assignment.validator.js` — no se usa
+        express-validator. La validación de body la realiza directamente
+        el esquema Mongoose. Un campo requerido ausente o un valor que
+        viole los constraints del modelo produce 400 `VALIDATION_ERROR`
+        (capturado por el `errorHandler` central).
+      - Las respuestas de error 404 (`Assignment not found`) las genera el
+        controller directamente con `res.json({ message })` — no pasan por
+        el `errorHandler` central y, por tanto, **no incluyen el campo
+        `error`**, a diferencia del resto de la API.
+      - Ninguna operación de lectura (`GET`) tiene restricción de rol más
+        allá de `verifyToken`.
+      - `DELETE /:id` devuelve **200** con el documento eliminado (no 204).
+      - No hay comprobación de que `course` o `lesson` existan en BD al
+        crear o actualizar.
+      - No hay restricción de ownership para TEACHER: cualquier TEACHER
+        puede crear, modificar o eliminar una tarea de cualquier curso,
+        independientemente de si está asignado a ese curso.
+
+paths:
+
+  /api/assignments:
+    post:
+      tags: [Assignments]
+      summary: Crear una tarea
+      description: >
+        Crea un nuevo Assignment. El body se pasa directamente a
+        `Assignment.create(req.body)` sin filtrar — todos los campos del
+        esquema Mongoose son aceptados, incluido `isPublished`.
+
+        No se valida que `course` o `lesson` existan en BD.
+
+        **Campos requeridos por el modelo** (ausencia → 400
+        `VALIDATION_ERROR`): `course`, `lesson`, `title`, `description`,
+        `dueDate`, `maxScore`.
+
+        Solo accesible por TEACHER o ADMIN.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AssignmentInput"
+            example:
+              course: "662d0a1b2c3d4e5f6a7b8c9c"
+              lesson: "665c2b3c4d5e6f7a8b9c0d01"
+              title: "Tarea: presente simple"
+              description: "Escribe 10 frases usando el presente simple."
+              dueDate: "2027-09-01T23:59:00.000Z"
+              maxScore: 100
+              isPublished: false
+      responses:
+        "201":
+          description: Assignment creado. Respuesta sin envelope.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Assignment"
+        "400":
+          description: >
+            Campo requerido ausente o valor que viola los constraints del
+            modelo Mongoose (`title` vacío, `maxScore` negativo, etc.).
+            El mensaje proviene directamente de Mongoose.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "VALIDATION_ERROR"
+                message: "Assignment validation failed: title: Path `title` is required."
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/TeacherOrAdminOnly"
+
+  /api/assignments/course/{courseId}:
+    get:
+      tags: [Assignments]
+      summary: Listar tareas de un curso
+      description: >
+        Devuelve el array de Assignments del curso indicado, ordenados por
+        `dueDate` ascendente. Respuesta sin envelope — array plano.
+
+        No valida que el `courseId` exista en BD: devuelve 200 con array
+        vacío `[]` si no hay assignments para ese curso o si el curso no
+        existe.
+
+        Sin restricción de rol (solo `verifyToken`): cualquier usuario
+        autenticado puede listar tareas, incluyendo STUDENT.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/courseId"
+      responses:
+        "200":
+          description: Array de assignments del curso (puede estar vacío).
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Assignment"
+              example:
+                - _id: "665f3e4f5a6b7c8d9e0f1b01"
+                  course: "662d0a1b2c3d4e5f6a7b8c9c"
+                  lesson: "665c2b3c4d5e6f7a8b9c0d01"
+                  title: "Tarea: presente simple"
+                  description: "Escribe 10 frases usando el presente simple."
+                  dueDate: "2027-09-01T23:59:00.000Z"
+                  maxScore: 100
+                  isPublished: true
+                  createdAt: "2026-06-30T10:00:00.000Z"
+                  updatedAt: "2026-06-30T10:00:00.000Z"
+        "400":
+          description: "`courseId` no es un ObjectId de MongoDB válido."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "INVALID_ID"
+                message: "El identificador proporcionado no es válido"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/assignments/{id}:
+    get:
+      tags: [Assignments]
+      summary: Obtener una tarea por id
+      description: >
+        Devuelve el Assignment indicado. Respuesta sin envelope.
+
+        Sin restricción de rol (solo `verifyToken`): cualquier usuario
+        autenticado puede consultar cualquier tarea.
+
+        El 404 lo genera el controller con `res.json({ message })` — no
+        incluye el campo `error`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/assignmentId"
+      responses:
+        "200":
+          description: Assignment encontrado.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Assignment"
+        "400":
+          description: "`id` no es un ObjectId de MongoDB válido."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "INVALID_ID"
+                message: "El identificador proporcionado no es válido"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/AssignmentNotFound"
+
+    put:
+      tags: [Assignments]
+      summary: Actualizar una tarea
+      description: >
+        Actualiza el Assignment indicado con los campos del body mediante
+        `findByIdAndUpdate(id, data, { new: true, runValidators: true })`.
+
+        El body se pasa **sin filtrar** al update — cualquier campo del
+        esquema puede modificarse, incluyendo `course`, `lesson` e
+        `isPublished`. `runValidators: true` significa que los constraints
+        del modelo Mongoose se evalúan; si alguno falla → 400
+        `VALIDATION_ERROR`.
+
+        No se valida que `course` o `lesson` existan en BD.
+
+        El 404 lo genera el controller con `res.json({ message })`.
+
+        Solo accesible por TEACHER o ADMIN. No hay restricción de
+        ownership: cualquier TEACHER puede actualizar cualquier tarea.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/assignmentId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AssignmentInput"
+            example:
+              title: "Tarea revisada: presente simple"
+              isPublished: true
+      responses:
+        "200":
+          description: Assignment actualizado. Respuesta sin envelope.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Assignment"
+        "400":
+          description: "`id` inválido, o valor del body que viola los constraints Mongoose."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                invalidId:
+                  summary: id no es un ObjectId válido
+                  value:
+                    error: "INVALID_ID"
+                    message: "El identificador proporcionado no es válido"
+                validationError:
+                  summary: Valor inválido para un campo del modelo
+                  value:
+                    error: "VALIDATION_ERROR"
+                    message: "Validation failed: maxScore: Path `maxScore` (−1) is less than minimum allowed value (0)."
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/TeacherOrAdminOnly"
+        "404":
+          $ref: "#/components/responses/AssignmentNotFound"
+
+    delete:
+      tags: [Assignments]
+      summary: Eliminar una tarea
+      description: >
+        Elimina el Assignment indicado y devuelve **200** con el documento
+        eliminado como body (no 204). Si el id no existe, devuelve 404.
+
+        El 404 lo genera el controller con `res.json({ message })` — no
+        incluye el campo `error`.
+
+        Solo accesible por TEACHER o ADMIN. No hay restricción de
+        ownership: cualquier TEACHER puede eliminar cualquier tarea.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/assignmentId"
+      responses:
+        "200":
+          description: Assignment eliminado. Devuelve el documento que acaba de eliminarse.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Assignment"
+        "400":
+          description: "`id` no es un ObjectId de MongoDB válido."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "INVALID_ID"
+                message: "El identificador proporcionado no es válido"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/TeacherOrAdminOnly"
+        "404":
+          $ref: "#/components/responses/AssignmentNotFound"
+
+components:
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    courseId:
+      name: courseId
+      in: path
+      required: true
+      description: ObjectId del Course cuyas tareas se quieren listar.
+      schema:
+        type: string
+        example: "662d0a1b2c3d4e5f6a7b8c9c"
+    assignmentId:
+      name: id
+      in: path
+      required: true
+      description: ObjectId del Assignment.
+      schema:
+        type: string
+        example: "665f3e4f5a6b7c8d9e0f1b01"
+
+  responses:
+    Unauthorized:
+      description: Token de autenticación ausente o inválido.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: "TOKEN_MISSING"
+            message: "Token de autenticación requerido"
+    TeacherOrAdminOnly:
+      description: El rol del usuario autenticado no es TEACHER ni ADMIN.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: "INSUFFICIENT_ROLE"
+            message: "No tienes permiso para realizar esta acción"
+    AssignmentNotFound:
+      description: >
+        No existe ningún Assignment con ese id. Respuesta generada
+        directamente por el controller — no incluye el campo `error`.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/RawMessageError"
+          example:
+            message: "Assignment not found"
+
+  schemas:
+    Assignment:
+      type: object
+      properties:
+        _id:
+          type: string
+          example: "665f3e4f5a6b7c8d9e0f1b01"
+        course:
+          type: string
+          description: ObjectId del Course al que pertenece la tarea.
+          example: "662d0a1b2c3d4e5f6a7b8c9c"
+        lesson:
+          type: string
+          description: ObjectId de la Lesson a la que está vinculada la tarea.
+          example: "665c2b3c4d5e6f7a8b9c0d01"
+        title:
+          type: string
+          maxLength: 150
+          example: "Tarea: presente simple"
+        description:
+          type: string
+          example: "Escribe 10 frases usando el presente simple."
+        dueDate:
+          type: string
+          format: date-time
+          example: "2027-09-01T23:59:00.000Z"
+        maxScore:
+          type: number
+          minimum: 0
+          example: 100
+        isPublished:
+          type: boolean
+          description: Default `false`. Controlado manualmente; no existe endpoint dedicado de publicación.
+          example: false
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    AssignmentInput:
+      type: object
+      description: >
+        No existe un validator de express-validator para este módulo —
+        la validación la impone el esquema Mongoose. `course`, `lesson`,
+        `title`, `description`, `dueDate` y `maxScore` son requeridos
+        por el modelo; si alguno falta el errorHandler devuelve 400.
+      properties:
+        course:
+          type: string
+          description: ObjectId del Course. No se valida existencia en BD.
+          example: "662d0a1b2c3d4e5f6a7b8c9c"
+        lesson:
+          type: string
+          description: ObjectId de la Lesson. No se valida existencia en BD.
+          example: "665c2b3c4d5e6f7a8b9c0d01"
+        title:
+          type: string
+          maxLength: 150
+          example: "Tarea: presente simple"
+        description:
+          type: string
+          example: "Escribe 10 frases usando el presente simple."
+        dueDate:
+          type: string
+          format: date-time
+          example: "2027-09-01T23:59:00.000Z"
+        maxScore:
+          type: number
+          minimum: 0
+          example: 100
+        isPublished:
+          type: boolean
+          description: Default `false` si se omite en la creación.
+          example: false
+
+    RawMessageError:
+      type: object
+      description: >
+        Forma de error de los 404 de este módulo — generados directamente
+        por el controller con `res.json({ message })`, sin pasar por el
+        `errorHandler` central; no incluyen el campo `error`.
+      properties:
+        message:
+          type: string
+          example: "Assignment not found"
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+          example: "INVALID_ID"
+        message:
+          type: string
+          example: "El identificador proporcionado no es válido"
+        fields:
+          type: array
+          items:
+            type: object
+            properties:
+              field:
+                type: string
+              message:
+                type: string

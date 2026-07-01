@@ -1,0 +1,757 @@
+openapi: 3.0.3
+
+info:
+  title: Elevate Your English — Progress API
+  version: 1.0.0
+
+tags:
+  - name: Progress
+    description: >
+      Seguimiento del progreso académico de los alumnos. Montado bajo
+      `/api/progress`. Incluye endpoints para que el propio alumno consulte
+      y actualice su progreso, y endpoints para que ADMIN/TEACHER consulten
+      el progreso de un alumno concreto.
+
+paths:
+
+  /api/progress/lessons/{lessonId}/complete:
+    patch:
+      tags: [Progress]
+      summary: Marcar una lección como completada
+      description: >
+        Cambia el `status` del `LessonProgress` del alumno autenticado
+        para esa lección de `not_started` a `completed`. Sin body — solo
+        el `lessonId` de la ruta.
+
+        **Solo accesible por STUDENT.**
+
+        **Precondiciones (en orden):**
+        1. El actor debe tener `isActive: true` en BD (`requireActiveUser`,
+           verificación real en BD antes de ejecutar el service) → 403
+           `ACCOUNT_INACTIVE` / 404 `USER_NOT_FOUND`.
+        2. Debe existir un `LessonProgress` para ese alumno y esa lección
+           (se crea al matricularse; no se crea bajo demanda) → 404
+           `PROGRESS_NOT_FOUND`.
+        3. Si la lección ya está `completed`, la operación es
+           **idempotente**: devuelve 200 `{ completed: true,
+           alreadyCompleted: true, progress }` sin re-validar matrícula
+           ni bloqueo, y sin efectos secundarios.
+        4. El alumno debe tener matrícula activa → 403 `NOT_ENROLLED`.
+        5. La lección debe estar desbloqueada según `unit.sequentialUnlock`
+           → 403 `LESSON_LOCKED` (tres variantes de mensaje posibles).
+
+        **Comportamiento de `sequentialUnlock`:**
+        - Si `sequentialUnlock: false`, nunca está bloqueada.
+        - Lección `order: 1`: la unidad anterior debe estar completamente
+          superada (100 % de lecciones + assessment aprobado si existe).
+        - Resto de lecciones: la lección anterior (`order - 1`) debe estar
+          `completed`.
+
+        **Efectos secundarios** (solo cuando `alreadyCompleted: false`):
+        si el 100 % del curso queda completado, la matrícula pasa a
+        `completed` y se emite un certificado. Se evalúan logros:
+        `first_lesson_completed`, `five_lessons_completed`,
+        `ten_lessons_completed`, `first_unit_completed`,
+        `first_course_completed`, `seven_day_streak`.
+
+        **Forma de la respuesta sin envelope** (el controller hace
+        `res.json(result)` directamente):
+        - Primera completada: `{ completed, alreadyCompleted,
+          progress, courseSnapshot, unitSnapshot }`.
+        - Ya completada: `{ completed, alreadyCompleted, progress }`
+          — **sin** `courseSnapshot` ni `unitSnapshot`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/lessonId"
+      responses:
+        "200":
+          description: Lección completada (o ya lo estaba).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CompleteLessonResult"
+              examples:
+                primeraVez:
+                  summary: Primera vez completada
+                  value:
+                    completed: true
+                    alreadyCompleted: false
+                    progress:
+                      _id: "665f3e4f5a6b7c8d9e0f1a20"
+                      enrollmentId: "665a2c3d4e5f6a7b8c9d0e30"
+                      studentId: "663e0a1b2c3d4e5f6a7b8c9d"
+                      lessonId: "665c2b3c4d5e6f7a8b9c0d01"
+                      unitId: "665b1a2b3c4d5e6f7a8b9c01"
+                      courseId: "662d0a1b2c3d4e5f6a7b8c9c"
+                      status: "completed"
+                      completedAt: "2026-06-30T11:30:00.000Z"
+                    courseSnapshot:
+                      overallProgress: 50
+                      completedLessons: 1
+                      totalLessons: 2
+                    unitSnapshot:
+                      progress: 100
+                      completedLessons: 1
+                      totalLessons: 1
+                yaCompletada:
+                  summary: Ya estaba completada (idempotente, sin snapshots)
+                  value:
+                    completed: true
+                    alreadyCompleted: true
+                    progress:
+                      _id: "665f3e4f5a6b7c8d9e0f1a20"
+                      enrollmentId: "665a2c3d4e5f6a7b8c9d0e30"
+                      studentId: "663e0a1b2c3d4e5f6a7b8c9d"
+                      lessonId: "665c2b3c4d5e6f7a8b9c0d01"
+                      unitId: "665b1a2b3c4d5e6f7a8b9c01"
+                      courseId: "662d0a1b2c3d4e5f6a7b8c9c"
+                      status: "completed"
+                      completedAt: "2026-06-29T10:00:00.000Z"
+        "400":
+          description: "`lessonId` no es un ObjectId de MongoDB válido."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "VALIDATION_ERROR"
+                message: "Datos de entrada inválidos"
+                fields:
+                  - field: "lessonId"
+                    message: "lessonId debe ser un ObjectId de MongoDB válido"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: >
+            Rol no es STUDENT; cuenta desactivada; sin matrícula activa;
+            o lección bloqueada (misma `error` code, mensajes distintos).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                insufficientRole:
+                  summary: Rol no es STUDENT
+                  value:
+                    error: "INSUFFICIENT_ROLE"
+                    message: "No tienes permiso para realizar esta acción"
+                accountInactive:
+                  summary: Cuenta del alumno desactivada
+                  value:
+                    error: "ACCOUNT_INACTIVE"
+                    message: "La cuenta está desactivada"
+                notEnrolled:
+                  summary: Sin matrícula activa
+                  value:
+                    error: "NOT_ENROLLED"
+                    message: "No tienes matrícula activa en este curso"
+                lessonLockedPrev:
+                  summary: Lección anterior no completada
+                  value:
+                    error: "LESSON_LOCKED"
+                    message: "Debes completar la lección anterior primero"
+                lessonLockedPrevUnit:
+                  summary: Unidad anterior sin completar (lecciones)
+                  value:
+                    error: "LESSON_LOCKED"
+                    message: "Debes completar todas las lecciones de la unidad anterior primero"
+                lessonLockedAssessment:
+                  summary: Assessment de unidad anterior no aprobado
+                  value:
+                    error: "LESSON_LOCKED"
+                    message: "Debes aprobar el assessment de la unidad anterior primero"
+        "404":
+          description: >
+            Usuario del token inexistente (caso extremo), o no existe
+            `LessonProgress` para ese alumno/lección (alumno no matriculado
+            en el curso que contiene esa lección).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                userNotFound:
+                  summary: Usuario del token inexistente
+                  value:
+                    error: "USER_NOT_FOUND"
+                    message: "Usuario no encontrado"
+                progressNotFound:
+                  summary: No hay LessonProgress para ese alumno/lección
+                  value:
+                    error: "PROGRESS_NOT_FOUND"
+                    message: "Progreso de lección no encontrado"
+
+  /api/progress/courses/{courseId}:
+    get:
+      tags: [Progress]
+      summary: Progreso del alumno en un curso
+      description: >
+        Devuelve el progreso del alumno autenticado en el curso indicado,
+        envuelto en `{ progress }`.
+
+        **No valida** que el `courseId` exista ni que el alumno esté
+        matriculado en él — devuelve 200 con progreso vacío
+        (`overallProgress: 0, units: []`) si no hay datos.
+
+        La proyección usada internamente por
+        `LessonRepository.findByCourseId` solo incluye `{ _id, unitId,
+        order }` de cada lección. El campo `lesson` dentro de
+        `units[].lessons[]` **no contiene `title`, `type`, `content`,
+        `videoUrl` ni `duration`**.
+
+        **Solo accesible por STUDENT.**
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/courseId"
+      responses:
+        "200":
+          description: Progreso del alumno en el curso.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  progress:
+                    $ref: "#/components/schemas/CourseProgress"
+              example:
+                progress:
+                  overallProgress: 50
+                  completedLessons: 1
+                  totalLessons: 2
+                  lastActivity: "2026-06-30T11:30:00.000Z"
+                  units:
+                    - unit:
+                        _id: "665b1a2b3c4d5e6f7a8b9c01"
+                        courseId: "662d0a1b2c3d4e5f6a7b8c9c"
+                        title: "Unidad 1"
+                        order: 1
+                        sequentialUnlock: true
+                      locked: false
+                      progress: 100
+                      completedLessons: 1
+                      totalLessons: 1
+                      lessons:
+                        - lesson:
+                            _id: "665c2b3c4d5e6f7a8b9c0d01"
+                            unitId: "665b1a2b3c4d5e6f7a8b9c01"
+                            order: 1
+                          locked: false
+                          completed: true
+        "400":
+          description: "`courseId` no es un ObjectId válido."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "VALIDATION_ERROR"
+                message: "Datos de entrada inválidos"
+                fields:
+                  - field: "courseId"
+                    message: "courseId debe ser un ObjectId de MongoDB válido"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/StudentOnly"
+
+  /api/progress/overview:
+    get:
+      tags: [Progress]
+      summary: Resumen de progreso del alumno en todos sus cursos activos
+      description: >
+        Devuelve un array de `CourseOverviewItem` para cada matrícula con
+        `status: active` del alumno autenticado, envuelto en
+        `{ overview }`.
+
+        **Solo accesible por STUDENT.**
+
+        **Nota de inconsistencia de envelope:** el endpoint equivalente
+        para ADMIN/TEACHER (`GET /api/progress/students/:studentId`)
+        devuelve los mismos datos bajo la clave `progress` en lugar de
+        `overview`.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Array de resúmenes de progreso por matrícula activa.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  overview:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/CourseOverviewItem"
+              example:
+                overview:
+                  - enrollmentId: "665a2c3d4e5f6a7b8c9d0e30"
+                    courseId: "662d0a1b2c3d4e5f6a7b8c9c"
+                    overallProgress: 50
+                    completedLessons: 1
+                    totalLessons: 2
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/StudentOnly"
+
+  /api/progress/students/{studentId}/courses/{courseId}:
+    get:
+      tags: [Progress]
+      summary: Progreso de un alumno en un curso (ADMIN/TEACHER)
+      description: >
+        Devuelve el mismo `CourseProgress` que `GET
+        /api/progress/courses/:courseId`, pero consultado por ADMIN o
+        TEACHER para un alumno concreto, envuelto en `{ progress }`.
+
+        **Solo accesible por ADMIN o TEACHER.**
+
+        Restricciones de scope para TEACHER:
+        `student.assignedTeacherId === teacherId` → 403
+        `STUDENT_NOT_IN_COHORT` si el alumno no pertenece a la cohorte.
+        Si el `studentId` no existe en BD → 404 `STUDENT_NOT_FOUND`.
+        ADMIN no tiene restricción de scope.
+
+        Como en el endpoint de student, **no valida** que el `courseId`
+        exista ni que el alumno esté matriculado — devuelve progreso vacío
+        si no hay datos.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/studentId"
+        - $ref: "#/components/parameters/courseId"
+      responses:
+        "200":
+          description: Progreso del alumno en el curso.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  progress:
+                    $ref: "#/components/schemas/CourseProgress"
+        "400":
+          description: "`studentId` o `courseId` no son un ObjectId válido."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "VALIDATION_ERROR"
+                message: "Datos de entrada inválidos"
+                fields:
+                  - field: "studentId"
+                    message: "studentId debe ser un ObjectId de MongoDB válido"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Rol no es ADMIN ni TEACHER, o TEACHER fuera de su cohorte.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                insufficientRole:
+                  summary: Rol no permitido
+                  value:
+                    error: "INSUFFICIENT_ROLE"
+                    message: "No tienes permiso para realizar esta acción"
+                notInCohort:
+                  summary: Alumno fuera de la cohorte del TEACHER
+                  value:
+                    error: "STUDENT_NOT_IN_COHORT"
+                    message: "Este alumno no pertenece a tu cohorte"
+        "404":
+          description: >
+            El `studentId` no existe en BD. Comprobado por
+            `validateTeacherScope` (solo para TEACHER; para ADMIN no se
+            valida la existencia del alumno, solo se devuelven datos vacíos).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "STUDENT_NOT_FOUND"
+                message: "Alumno no encontrado"
+
+  /api/progress/students/{studentId}:
+    get:
+      tags: [Progress]
+      summary: Resumen de progreso de un alumno en todos sus cursos activos (ADMIN/TEACHER)
+      description: >
+        Devuelve el mismo array de `CourseOverviewItem` que `GET
+        /api/progress/overview` para el alumno indicado, pero envuelto en
+        `{ progress }` en lugar de `{ overview }`.
+
+        **Inconsistencia de envelope real:** el endpoint equivalente del
+        propio alumno usa la clave `overview`; este usa `progress`. El
+        array de datos tiene la misma estructura en ambos casos.
+
+        **Solo accesible por ADMIN o TEACHER.** Mismas restricciones de
+        scope que `GET /api/progress/students/:studentId/courses/:courseId`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/studentId"
+      responses:
+        "200":
+          description: Resumen de progreso del alumno por matrícula activa.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  progress:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/CourseOverviewItem"
+              example:
+                progress:
+                  - enrollmentId: "665a2c3d4e5f6a7b8c9d0e30"
+                    courseId: "662d0a1b2c3d4e5f6a7b8c9c"
+                    overallProgress: 50
+                    completedLessons: 1
+                    totalLessons: 2
+        "400":
+          description: "`studentId` no es un ObjectId válido."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "VALIDATION_ERROR"
+                message: "Datos de entrada inválidos"
+                fields:
+                  - field: "studentId"
+                    message: "studentId debe ser un ObjectId de MongoDB válido"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Rol no es ADMIN ni TEACHER, o TEACHER fuera de su cohorte.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                insufficientRole:
+                  summary: Rol no permitido
+                  value:
+                    error: "INSUFFICIENT_ROLE"
+                    message: "No tienes permiso para realizar esta acción"
+                notInCohort:
+                  summary: Alumno fuera de la cohorte del TEACHER
+                  value:
+                    error: "STUDENT_NOT_IN_COHORT"
+                    message: "Este alumno no pertenece a tu cohorte"
+        "404":
+          description: >
+            El `studentId` no existe en BD (solo comprobado para TEACHER
+            via `validateTeacherScope`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "STUDENT_NOT_FOUND"
+                message: "Alumno no encontrado"
+
+components:
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    lessonId:
+      name: lessonId
+      in: path
+      required: true
+      description: ObjectId de la Lesson.
+      schema:
+        type: string
+        example: "665c2b3c4d5e6f7a8b9c0d01"
+    courseId:
+      name: courseId
+      in: path
+      required: true
+      description: ObjectId del Course.
+      schema:
+        type: string
+        example: "662d0a1b2c3d4e5f6a7b8c9c"
+    studentId:
+      name: studentId
+      in: path
+      required: true
+      description: ObjectId del User con rol student.
+      schema:
+        type: string
+        example: "663e0a1b2c3d4e5f6a7b8c9d"
+
+  responses:
+    Unauthorized:
+      description: Token de autenticación ausente o inválido.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: "TOKEN_MISSING"
+            message: "Token de autenticación requerido"
+    StudentOnly:
+      description: El rol del usuario autenticado no es STUDENT.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: "INSUFFICIENT_ROLE"
+            message: "No tienes permiso para realizar esta acción"
+
+  schemas:
+    LessonProgress:
+      type: object
+      properties:
+        _id:
+          type: string
+          example: "665f3e4f5a6b7c8d9e0f1a20"
+        enrollmentId:
+          type: string
+          example: "665a2c3d4e5f6a7b8c9d0e30"
+        studentId:
+          type: string
+          example: "663e0a1b2c3d4e5f6a7b8c9d"
+        lessonId:
+          type: string
+          example: "665c2b3c4d5e6f7a8b9c0d01"
+        unitId:
+          type: string
+          example: "665b1a2b3c4d5e6f7a8b9c01"
+        courseId:
+          type: string
+          example: "662d0a1b2c3d4e5f6a7b8c9c"
+        status:
+          type: string
+          enum: [not_started, completed]
+          example: "completed"
+        completedAt:
+          type: string
+          format: date-time
+          nullable: true
+          example: "2026-06-30T11:30:00.000Z"
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    CompleteLessonResult:
+      type: object
+      description: >
+        Respuesta directa de `PATCH .../complete` (sin envelope). Los
+        campos `courseSnapshot` y `unitSnapshot` solo aparecen cuando
+        `alreadyCompleted: false`.
+      properties:
+        completed:
+          type: boolean
+          example: true
+        alreadyCompleted:
+          type: boolean
+          example: false
+        progress:
+          $ref: "#/components/schemas/LessonProgress"
+        courseSnapshot:
+          type: object
+          description: "Solo presente cuando `alreadyCompleted: false`."
+          properties:
+            overallProgress:
+              type: integer
+              minimum: 0
+              maximum: 100
+              example: 50
+            completedLessons:
+              type: integer
+              example: 1
+            totalLessons:
+              type: integer
+              example: 2
+        unitSnapshot:
+          type: object
+          description: "Solo presente cuando `alreadyCompleted: false`."
+          properties:
+            progress:
+              type: integer
+              minimum: 0
+              maximum: 100
+              example: 100
+            completedLessons:
+              type: integer
+              example: 1
+            totalLessons:
+              type: integer
+              example: 1
+
+    LessonProgressItem:
+      type: object
+      description: >
+        Item de lección dentro de `CourseProgress.units[].lessons`.
+        La proyección de `LessonRepository.findByCourseId` incluye
+        únicamente `_id`, `unitId` y `order` — `title`, `type`,
+        `content`, `videoUrl` y `duration` no están presentes.
+      properties:
+        lesson:
+          type: object
+          properties:
+            _id:
+              type: string
+              example: "665c2b3c4d5e6f7a8b9c0d01"
+            unitId:
+              type: string
+              example: "665b1a2b3c4d5e6f7a8b9c01"
+            order:
+              type: integer
+              example: 1
+        locked:
+          type: boolean
+          description: >
+            Calculado por `progressCalculator.isLessonLocked`. Siempre
+            `false` si `unit.sequentialUnlock: false`.
+          example: false
+        completed:
+          type: boolean
+          example: true
+
+    UnitProgressItem:
+      type: object
+      properties:
+        unit:
+          type: object
+          description: Documento Unit completo tal como lo devuelve Mongoose.
+          properties:
+            _id:
+              type: string
+              example: "665b1a2b3c4d5e6f7a8b9c01"
+            courseId:
+              type: string
+              example: "662d0a1b2c3d4e5f6a7b8c9c"
+            title:
+              type: string
+              example: "Unidad 1: Introducción"
+            description:
+              type: string
+              nullable: true
+              example: null
+            order:
+              type: integer
+              example: 1
+            sequentialUnlock:
+              type: boolean
+              example: true
+            createdAt:
+              type: string
+              format: date-time
+            updatedAt:
+              type: string
+              format: date-time
+        locked:
+          type: boolean
+          description: >
+            `true` si la unidad anterior no está al 100 % o su assessment
+            no está aprobado.
+          example: false
+        progress:
+          type: integer
+          minimum: 0
+          maximum: 100
+          description: Porcentaje de lecciones completadas en la unidad.
+          example: 100
+        completedLessons:
+          type: integer
+          example: 1
+        totalLessons:
+          type: integer
+          example: 1
+        lessons:
+          type: array
+          items:
+            $ref: "#/components/schemas/LessonProgressItem"
+
+    CourseProgress:
+      type: object
+      properties:
+        overallProgress:
+          type: integer
+          minimum: 0
+          maximum: 100
+          description: >
+            `floor((completedLessons / totalLessons) * 100)`. 0 si el
+            alumno no tiene LessonProgress en este curso.
+          example: 50
+        completedLessons:
+          type: integer
+          example: 1
+        totalLessons:
+          type: integer
+          example: 2
+        lastActivity:
+          type: string
+          format: date-time
+          nullable: true
+          description: >
+            `MAX(completedAt)` entre los `LessonProgress` completados del
+            alumno en el curso. `null` si no hay ninguna lección completada.
+          example: "2026-06-30T11:30:00.000Z"
+        units:
+          type: array
+          items:
+            $ref: "#/components/schemas/UnitProgressItem"
+
+    CourseOverviewItem:
+      type: object
+      description: >
+        Resumen de progreso del alumno en un curso con matrícula activa.
+        Devuelto en `{ overview: [...] }` por `GET /api/progress/overview`
+        y en `{ progress: [...] }` por `GET
+        /api/progress/students/:studentId` — mismo contenido, clave de
+        envelope distinta.
+      properties:
+        enrollmentId:
+          type: string
+          example: "665a2c3d4e5f6a7b8c9d0e30"
+        courseId:
+          type: string
+          example: "662d0a1b2c3d4e5f6a7b8c9c"
+        overallProgress:
+          type: integer
+          minimum: 0
+          maximum: 100
+          example: 50
+        completedLessons:
+          type: integer
+          example: 1
+        totalLessons:
+          type: integer
+          example: 2
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+          example: "PROGRESS_NOT_FOUND"
+        message:
+          type: string
+          example: "Progreso de lección no encontrado"
+        fields:
+          type: array
+          items:
+            type: object
+            properties:
+              field:
+                type: string
+              message:
+                type: string

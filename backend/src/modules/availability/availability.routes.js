@@ -1,17 +1,18 @@
 'use strict';
 
-/**
- * modules/availability/availability.routes.js
- * Montado bajo /api/teachers
- *
- *   GET  /api/teachers/:teacherId/availability  → getTemplate     [admin, teacher(own), student(assigned)]
- *   PUT  /api/teachers/:teacherId/availability  → replaceTemplate [admin, teacher(own)] + requireActiveUser
- *   GET  /api/teachers/:teacherId/slots         → getSlots        [admin, teacher(own), student(assigned)]
- */
+const { Router }               = require('express');
+const verifyToken              = require('../../middlewares/verifyToken');
+const requireRole               = require('../../middlewares/requireRole');
+const validate                  = require('../../middlewares/validate');
+const AvailabilityController   = require('./availability.controller');
+const { createAvailabilitySchema } = require('./availability.validator');
+const { ROLES }                 = require('../../config/constants');
 
-// TODO: Implementar en Phase 7
+const router = Router();
 
-const { Router } = require('express');
-const router = Router({ mergeParams: true });
+const teacherOnly = requireRole(ROLES.TEACHER);
+
+router.get('/me',  verifyToken, teacherOnly, AvailabilityController.getMyAvailability);
+router.post('/',   verifyToken, teacherOnly, ...validate(createAvailabilitySchema), AvailabilityController.createAvailability);
 
 module.exports = router;

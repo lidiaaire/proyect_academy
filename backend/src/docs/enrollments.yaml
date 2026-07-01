@@ -1,0 +1,665 @@
+openapi: 3.0.3
+
+info:
+  title: Elevate Your English — Enrollments API
+  version: 1.0.0
+
+tags:
+  - name: Enrollments
+    description: >
+      Gestión de matrículas (Enrollment) de un alumno en un curso. Las
+      matrículas son permanentes (nunca se eliminan); solo cambian de
+      `status`. Solo se documentan los endpoints realmente montados en
+      `enrollment.routes.js`. No existe una ruta genérica `PATCH
+      /api/enrollments/:id` pese a lo que indica el comentario de cabecera
+      del archivo de rutas: en el router real solo existen `PATCH
+      /:id/suspend` y `PATCH /:id/activate`, ambos implementados inyectando
+      `req.body.status` antes de llamar al mismo controller `updateStatus`.
+
+paths:
+
+  /api/enrollments:
+    get:
+      tags: [Enrollments]
+      summary: Listar matrículas
+      description: >
+        El resultado depende del rol del usuario autenticado. No hay
+        middleware `requireRole` en esta ruta (solo `verifyToken`):
+        cualquier usuario autenticado puede llamarla.
+
+        - **STUDENT**: devuelve únicamente sus propias matrículas
+          (`EnrollmentRepository.findByStudent`), con `courseId` populado
+          (`title`, `level`, `coverImageUrl`, `status`). Los query params
+          `studentId`, `courseId` y `status` se ignoran para este rol.
+        - **ADMIN**: usa `EnrollmentRepository.findAll`, filtrable por
+          `studentId`, `courseId` y `status` vía query params, sin
+          restricción de scope y **sin populate** (los campos
+          `studentId`/`courseId` se devuelven como ObjectId planos, no
+          como objetos con datos del usuario o curso).
+        - **TEACHER**: misma rama de código que ADMIN (`findAll`, sin
+          populate), pero con scope restringido a su cohorte
+          (`User.assignedTeacherId === teacherId`), igual que en
+          `progress.service.js` y `teacher-analytics.service.js`:
+          - Si se filtra por `studentId`, ese alumno debe pertenecer a la
+            cohorte del profesor (`validateTeacherScope`) → 403
+            `STUDENT_NOT_IN_COHORT` si no.
+          - Si no se filtra por `studentId`, el listado se restringe
+            automáticamente a los alumnos de su cohorte.
+          `courseId` y `status` siguen aplicándose como filtros
+          adicionales sobre ese conjunto ya restringido.
+
+        **Validación:** no hay ningún middleware `validate(...)` en esta
+        ruta — `studentId`, `courseId`, `page`, `limit`, `sortBy` y
+        `sortOrder` no pasan por express-validator. Si `studentId` o
+        `courseId` no son ObjectId válidos, Mongoose lanza un `CastError`
+        al ejecutar la query, que el `errorHandler` traduce a 400
+        `INVALID_ID` (no a 400 `VALIDATION_ERROR` con `fields`, como en
+        otros endpoints de la API que sí validan explícitamente).
+
+        **Paginación:** `page`, `limit`, `sortBy` y `sortOrder` se aplican
+        vía `pagination.toMongoOptions(...)`. Defaults: `page=1`,
+        `limit=20` (máximo 100), `sortBy=createdAt`, `sortOrder=desc`. Para
+        STUDENT, el sort real es siempre `enrolledAt` descendente
+        (hardcodeado en `findByStudent`, ignora `sortBy`/`sortOrder`).
+
+        La respuesta es siempre `{ docs, total }` (sin `page`, `limit`,
+        `totalPages`, `hasNext` ni `hasPrev`).
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: studentId
+          in: query
+          required: false
+          description: >
+            Filtra por ObjectId del alumno. Solo tiene efecto para
+            ADMIN/TEACHER (se ignora para STUDENT). Sin validación de
+            formato previa: un valor no-ObjectId produce 400 `INVALID_ID`.
+            Para TEACHER, el alumno indicado debe pertenecer a su cohorte
+            → 403 `STUDENT_NOT_IN_COHORT` si no.
+          schema:
+            type: string
+            example: "663e0a1b2c3d4e5f6a7b8c9d"
+        - name: courseId
+          in: query
+          required: false
+          description: >
+            Filtra por ObjectId del curso. Solo tiene efecto para
+            ADMIN/TEACHER (se ignora para STUDENT). Sin validación de
+            formato previa: un valor no-ObjectId produce 400 `INVALID_ID`.
+            Para TEACHER se aplica como filtro adicional sobre su cohorte.
+          schema:
+            type: string
+            example: "662d0a1b2c3d4e5f6a7b8c9c"
+        - name: status
+          in: query
+          required: false
+          description: >
+            Filtra por estado de la matrícula. Solo tiene efecto para
+            ADMIN/TEACHER (se ignora para STUDENT). Sin validación: un
+            valor fuera del enum simplemente no encontrará coincidencias
+            (no produce error).
+          schema:
+            type: string
+            enum: [active, suspended, completed]
+        - name: page
+          in: query
+          required: false
+          description: Número de página. Solo tiene efecto para ADMIN/TEACHER. Default 1.
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: limit
+          in: query
+          required: false
+          description: Resultados por página (máx. 100). Solo tiene efecto para ADMIN/TEACHER. Default 20.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: sortBy
+          in: query
+          required: false
+          description: Campo de ordenación. Solo tiene efecto para ADMIN/TEACHER (STUDENT siempre ordena por enrolledAt desc). Default createdAt.
+          schema:
+            type: string
+            default: "createdAt"
+        - name: sortOrder
+          in: query
+          required: false
+          description: Dirección de ordenación. Solo tiene efecto para ADMIN/TEACHER. Default desc.
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: "desc"
+      responses:
+        "200":
+          description: Matrículas visibles para el rol del usuario autenticado.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  docs:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Enrollment"
+                  total:
+                    type: integer
+                    example: 1
+              examples:
+                comoStudent:
+                  summary: Respuesta para STUDENT (courseId populado)
+                  value:
+                    docs:
+                      - _id: "665a2c3d4e5f6a7b8c9d0e30"
+                        studentId: "663e0a1b2c3d4e5f6a7b8c9d"
+                        courseId:
+                          _id: "662d0a1b2c3d4e5f6a7b8c9c"
+                          title: "English Unplugged"
+                          level: "B1"
+                          coverImageUrl: null
+                          status: "published"
+                        status: "active"
+                        enrolledAt: "2026-02-01T09:00:00.000Z"
+                        createdAt: "2026-02-01T09:00:00.000Z"
+                        updatedAt: "2026-02-01T09:00:00.000Z"
+                    total: 1
+                comoAdminOTeacher:
+                  summary: Respuesta para ADMIN/TEACHER (sin populate)
+                  value:
+                    docs:
+                      - _id: "665a2c3d4e5f6a7b8c9d0e30"
+                        studentId: "663e0a1b2c3d4e5f6a7b8c9d"
+                        courseId: "662d0a1b2c3d4e5f6a7b8c9c"
+                        status: "active"
+                        enrolledAt: "2026-02-01T09:00:00.000Z"
+                        createdAt: "2026-02-01T09:00:00.000Z"
+                        updatedAt: "2026-02-01T09:00:00.000Z"
+                    total: 1
+        "400":
+          description: "`studentId` o `courseId` no son un ObjectId de MongoDB válido."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "INVALID_ID"
+                message: "El identificador proporcionado no es válido"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: >
+            TEACHER filtrando por un `studentId` que no pertenece a su
+            cohorte (`User.assignedTeacherId` distinto del profesor
+            autenticado).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "STUDENT_NOT_IN_COHORT"
+                message: "Este alumno no pertenece a tu cohorte"
+
+    post:
+      tags: [Enrollments]
+      summary: Crear una matrícula
+      description: >
+        Matricula a un alumno (`studentId`) en un curso (`courseId`). No es
+        autoservicio: solo ADMIN puede crear matrículas.
+
+        Validaciones aplicadas (en orden):
+        1. El actor (ADMIN) debe tener `isActive: true`
+           (`requireActiveUser`, comprobado **antes** de validar el body)
+           → 403 `ACCOUNT_INACTIVE` / 404 `USER_NOT_FOUND` si el token ya
+           no corresponde a un usuario existente.
+        2. `studentId` y `courseId` deben ser ObjectId válidos y estar
+           presentes en el body → 400 `VALIDATION_ERROR`.
+        3. El `studentId` debe corresponder a un usuario existente con
+           `role: student` → 422 `INVALID_STUDENT` si no.
+        4. Ese student debe tener `isActive: true` → 403 `ACCOUNT_INACTIVE`
+           si no (mismo código que el paso 1, pero referido al alumno a
+           matricular, no al actor).
+        5. El curso debe existir → 404 `COURSE_NOT_FOUND`.
+        6. El curso debe estar `published` → 422 `COURSE_NOT_PUBLISHED`.
+        7. No debe existir ya una matrícula de ese student en ese curso →
+           409 `ALREADY_ENROLLED`.
+
+        Como efecto colateral, al crear la Enrollment se inicializan todos
+        los `LessonProgress` del curso para el alumno
+        (`ProgressService.initializeProgress`).
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateEnrollmentInput"
+      responses:
+        "201":
+          description: "Matrícula creada con `status: active`."
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  enrollment:
+                    $ref: "#/components/schemas/Enrollment"
+              example:
+                enrollment:
+                  _id: "665a2c3d4e5f6a7b8c9d0e30"
+                  studentId: "663e0a1b2c3d4e5f6a7b8c9d"
+                  courseId: "662d0a1b2c3d4e5f6a7b8c9c"
+                  status: "active"
+                  enrolledAt: "2026-06-30T10:00:00.000Z"
+                  createdAt: "2026-06-30T10:00:00.000Z"
+                  updatedAt: "2026-06-30T10:00:00.000Z"
+        "400":
+          description: Datos de entrada inválidos (`studentId`/`courseId` ausentes o no son ObjectId).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "VALIDATION_ERROR"
+                message: "Datos de entrada inválidos"
+                fields:
+                  - field: "studentId"
+                    message: "studentId debe ser un ObjectId de MongoDB válido"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: >
+            El rol del actor no es ADMIN, o el actor (admin) tiene la
+            cuenta desactivada, o el alumno a matricular tiene la cuenta
+            desactivada.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                insufficientRole:
+                  summary: Rol no permitido en la ruta
+                  value:
+                    error: "INSUFFICIENT_ROLE"
+                    message: "No tienes permiso para realizar esta acción"
+                actorInactive:
+                  summary: El propio admin tiene la cuenta desactivada
+                  value:
+                    error: "ACCOUNT_INACTIVE"
+                    message: "La cuenta está desactivada"
+                studentInactive:
+                  summary: El alumno a matricular tiene la cuenta desactivada
+                  value:
+                    error: "ACCOUNT_INACTIVE"
+                    message: "El student tiene la cuenta desactivada"
+        "404":
+          description: El actor (admin) del token ya no existe, o el curso indicado no existe.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                actorNotFound:
+                  summary: Usuario del token no encontrado (caso extremo)
+                  value:
+                    error: "USER_NOT_FOUND"
+                    message: "Usuario no encontrado"
+                courseNotFound:
+                  summary: Curso no encontrado
+                  value:
+                    error: "COURSE_NOT_FOUND"
+                    message: "Curso no encontrado"
+        "409":
+          description: El alumno ya tiene una matrícula en ese curso.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "ALREADY_ENROLLED"
+                message: "El student ya tiene una matrícula en este curso"
+        "422":
+          description: "`studentId` no corresponde a un usuario con rol student, o el curso no está publicado."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                invalidStudent:
+                  summary: studentId no es un usuario con rol student
+                  value:
+                    error: "INVALID_STUDENT"
+                    message: "El usuario debe existir y tener rol student"
+                courseNotPublished:
+                  summary: El curso no está publicado
+                  value:
+                    error: "COURSE_NOT_PUBLISHED"
+                    message: "Solo se puede matricular en cursos publicados"
+
+  /api/enrollments/{id}:
+    get:
+      tags: [Enrollments]
+      summary: Obtener una matrícula por id
+      description: >
+        Devuelve el documento de Enrollment indicado, **sin populate**
+        (`studentId`/`courseId` como ObjectId planos).
+
+        Restricciones de autorización:
+        - ADMIN puede ver cualquier matrícula, sin restricción de scope.
+        - TEACHER solo puede ver matrículas de alumnos de su cohorte
+          (`User.assignedTeacherId === teacherId`, vía
+          `validateTeacherScope`) → 403 `STUDENT_NOT_IN_COHORT` si el
+          `studentId` de la matrícula no pertenece a su cohorte.
+        - STUDENT solo puede ver sus propias matrículas → 403 `FORBIDDEN`
+          si `enrollment.studentId` no coincide con su propio id.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/enrollmentId"
+      responses:
+        "200":
+          description: Matrícula encontrada.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  enrollment:
+                    $ref: "#/components/schemas/Enrollment"
+        "400":
+          description: El id proporcionado no es un ObjectId de MongoDB válido.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "VALIDATION_ERROR"
+                message: "Datos de entrada inválidos"
+                fields:
+                  - field: "id"
+                    message: "El id debe ser un ObjectId de MongoDB válido"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: >
+            El STUDENT autenticado no es el dueño de esta matrícula, o el
+            TEACHER autenticado no tiene a ese alumno en su cohorte.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                notOwner:
+                  summary: STUDENT no es el dueño de la matrícula
+                  value:
+                    error: "FORBIDDEN"
+                    message: "Solo puedes acceder a tus propias matrículas"
+                notInCohort:
+                  summary: TEACHER, alumno fuera de su cohorte
+                  value:
+                    error: "STUDENT_NOT_IN_COHORT"
+                    message: "Este alumno no pertenece a tu cohorte"
+        "404":
+          description: No existe ninguna matrícula con ese id.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "ENROLLMENT_NOT_FOUND"
+                message: "Matrícula no encontrada"
+
+  /api/enrollments/{id}/suspend:
+    patch:
+      tags: [Enrollments]
+      summary: Suspender una matrícula
+      description: >
+        Cambia el `status` de la matrícula a `suspended`. La ruta inyecta
+        `req.body.status = 'suspended'` antes de invocar el mismo
+        controller que `updateStatus`; el body enviado por el cliente se
+        ignora por completo (no se valida con `updateStatusSchema`, que
+        queda sin uso real para esta ruta).
+
+        Única precondición de negocio alcanzable en la práctica: la
+        matrícula no debe estar ya `completed` → 409
+        `ENROLLMENT_COMPLETED`. (Las comprobaciones de `INVALID_STATUS` y
+        `CANNOT_FORCE_COMPLETE` del service son código defensivo
+        inalcanzable aquí, porque el status inyectado por la ruta siempre
+        es `suspended`, un valor válido y distinto de `completed`.)
+
+        Solo accesible por ADMIN.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/enrollmentId"
+      responses:
+        "200":
+          description: Matrícula suspendida.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  enrollment:
+                    $ref: "#/components/schemas/Enrollment"
+              example:
+                enrollment:
+                  _id: "665a2c3d4e5f6a7b8c9d0e30"
+                  studentId: "663e0a1b2c3d4e5f6a7b8c9d"
+                  courseId: "662d0a1b2c3d4e5f6a7b8c9c"
+                  status: "suspended"
+                  enrolledAt: "2026-02-01T09:00:00.000Z"
+                  createdAt: "2026-02-01T09:00:00.000Z"
+                  updatedAt: "2026-06-30T10:15:00.000Z"
+        "400":
+          description: El id proporcionado no es un ObjectId de MongoDB válido.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "VALIDATION_ERROR"
+                message: "Datos de entrada inválidos"
+                fields:
+                  - field: "id"
+                    message: "El id debe ser un ObjectId de MongoDB válido"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/AdminOnly"
+        "404":
+          description: No existe ninguna matrícula con ese id.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "ENROLLMENT_NOT_FOUND"
+                message: "Matrícula no encontrada"
+        "409":
+          description: La matrícula ya está en estado `completed` y no puede modificarse.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "ENROLLMENT_COMPLETED"
+                message: "No se puede modificar una matrícula completada"
+
+  /api/enrollments/{id}/activate:
+    patch:
+      tags: [Enrollments]
+      summary: Reactivar una matrícula
+      description: >
+        Cambia el `status` de la matrícula a `active`. Igual que en
+        `/suspend`, la ruta inyecta `req.body.status = 'active'` y el body
+        enviado por el cliente se ignora.
+
+        Única precondición de negocio alcanzable en la práctica: la
+        matrícula no debe estar ya `completed` → 409
+        `ENROLLMENT_COMPLETED`.
+
+        Solo accesible por ADMIN.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/enrollmentId"
+      responses:
+        "200":
+          description: Matrícula reactivada.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  enrollment:
+                    $ref: "#/components/schemas/Enrollment"
+              example:
+                enrollment:
+                  _id: "665a2c3d4e5f6a7b8c9d0e30"
+                  studentId: "663e0a1b2c3d4e5f6a7b8c9d"
+                  courseId: "662d0a1b2c3d4e5f6a7b8c9c"
+                  status: "active"
+                  enrolledAt: "2026-02-01T09:00:00.000Z"
+                  createdAt: "2026-02-01T09:00:00.000Z"
+                  updatedAt: "2026-06-30T10:20:00.000Z"
+        "400":
+          description: El id proporcionado no es un ObjectId de MongoDB válido.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "VALIDATION_ERROR"
+                message: "Datos de entrada inválidos"
+                fields:
+                  - field: "id"
+                    message: "El id debe ser un ObjectId de MongoDB válido"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/AdminOnly"
+        "404":
+          description: No existe ninguna matrícula con ese id.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "ENROLLMENT_NOT_FOUND"
+                message: "Matrícula no encontrada"
+        "409":
+          description: La matrícula ya está en estado `completed` y no puede modificarse.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "ENROLLMENT_COMPLETED"
+                message: "No se puede modificar una matrícula completada"
+
+components:
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    enrollmentId:
+      name: id
+      in: path
+      required: true
+      description: ObjectId de la Enrollment.
+      schema:
+        type: string
+        example: "665a2c3d4e5f6a7b8c9d0e30"
+
+  responses:
+    Unauthorized:
+      description: Token de autenticación ausente o inválido.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: "TOKEN_MISSING"
+            message: "Token de autenticación requerido"
+    AdminOnly:
+      description: El rol del usuario autenticado no es ADMIN.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: "INSUFFICIENT_ROLE"
+            message: "No tienes permiso para realizar esta acción"
+
+  schemas:
+    CreateEnrollmentInput:
+      type: object
+      required: [studentId, courseId]
+      properties:
+        studentId:
+          type: string
+          description: ObjectId de un usuario con rol student.
+          example: "663e0a1b2c3d4e5f6a7b8c9d"
+        courseId:
+          type: string
+          description: ObjectId de un curso en estado published.
+          example: "662d0a1b2c3d4e5f6a7b8c9c"
+
+    Enrollment:
+      type: object
+      description: >
+        Forma sin populate, devuelta por POST, GET /:id, y por GET / para
+        ADMIN/TEACHER. Para STUDENT, GET / devuelve `courseId` como objeto
+        populado en lugar de ObjectId plano (ver ejemplo en GET /).
+      properties:
+        _id:
+          type: string
+          example: "665a2c3d4e5f6a7b8c9d0e30"
+        studentId:
+          type: string
+          example: "663e0a1b2c3d4e5f6a7b8c9d"
+        courseId:
+          type: string
+          example: "662d0a1b2c3d4e5f6a7b8c9c"
+        status:
+          type: string
+          enum: [active, suspended, completed]
+          example: "active"
+        enrolledAt:
+          type: string
+          format: date-time
+          description: Fecha de matriculación. Inmutable tras la creación.
+          example: "2026-02-01T09:00:00.000Z"
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+          example: "ENROLLMENT_NOT_FOUND"
+        message:
+          type: string
+          example: "Matrícula no encontrada"
+        fields:
+          type: array
+          items:
+            type: object
+            properties:
+              field:
+                type: string
+              message:
+                type: string

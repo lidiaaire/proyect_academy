@@ -1,0 +1,263 @@
+openapi: 3.0.3
+
+info:
+  title: Elevate Your English — Availability API
+  version: 1.0.0
+
+tags:
+  - name: Availability
+    description: Gestión de la disponibilidad horaria semanal de los profesores (TEACHER).
+
+paths:
+
+  /api/availability/me:
+    get:
+      tags: [Availability]
+      summary: Obtener mi disponibilidad
+      description: >
+        Devuelve los slots de disponibilidad activos (`isActive: true`) del profesor
+        autenticado, ordenados por `dayOfWeek` ascendente y, dentro de cada día,
+        por `startTime` ascendente.
+
+        Solo accesible por usuarios con rol TEACHER.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Lista de slots de disponibilidad del profesor autenticado.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  availability:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/AvailabilitySlot"
+              example:
+                availability:
+                  - dayOfWeek: 1
+                    startTime: "09:00"
+                    endTime: "10:00"
+                    isActive: true
+                  - dayOfWeek: 3
+                    startTime: "15:00"
+                    endTime: "16:30"
+                    isActive: true
+        "401":
+          description: Token de autenticación ausente o inválido.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "TOKEN_MISSING"
+                message: "Token de autenticación requerido"
+        "403":
+          description: El rol del usuario autenticado no es TEACHER.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "INSUFFICIENT_ROLE"
+                message: "No tienes permiso para realizar esta acción"
+
+  /api/availability:
+    post:
+      tags: [Availability]
+      summary: Crear un slot de disponibilidad
+      description: >
+        Crea un nuevo slot de disponibilidad semanal para el profesor autenticado.
+
+        Comportamiento:
+        - Si ya existe un slot idéntico (mismo `teacher`, `dayOfWeek`, `startTime`
+          y `endTime`) se devuelve ese slot existente con status 201, sin crear
+          duplicados.
+        - En caso contrario, se valida que el nuevo intervalo no se solape con
+          ningún slot ya existente ese mismo día para el profesor.
+
+        Validaciones aplicadas (en orden):
+        1. `startTime` debe ser estrictamente anterior a `endTime` (400).
+        2. El intervalo no debe solaparse con un slot existente del mismo día (409).
+
+        Solo accesible por usuarios con rol TEACHER.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAvailabilityInput"
+      responses:
+        "201":
+          description: >
+            Slot de disponibilidad creado correctamente, o slot idéntico ya
+            existente devuelto sin duplicar.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  availability:
+                    $ref: "#/components/schemas/Availability"
+              example:
+                availability:
+                  _id: "665a2c3d4e5f6a7b8c9d0e1f"
+                  teacher: "663e0a1b2c3d4e5f6a7b8c9d"
+                  dayOfWeek: 1
+                  startTime: "09:00"
+                  endTime: "10:00"
+                  isActive: true
+                  createdAt: "2026-06-29T10:30:00.000Z"
+                  updatedAt: "2026-06-29T10:30:00.000Z"
+        "400":
+          description: Datos de entrada inválidos, o `startTime` no es anterior a `endTime`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                validationError:
+                  summary: Error de validación de campos (express-validator)
+                  value:
+                    error: "VALIDATION_ERROR"
+                    message: "Datos de entrada inválidos"
+                    fields:
+                      - field: "dayOfWeek"
+                        message: "dayOfWeek debe ser un entero entre 0 y 6"
+                invalidTimeRange:
+                  summary: startTime no es anterior a endTime
+                  value:
+                    error: "INVALID_TIME_RANGE"
+                    message: "startTime debe ser anterior a endTime"
+        "401":
+          description: Token de autenticación ausente o inválido.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "TOKEN_MISSING"
+                message: "Token de autenticación requerido"
+        "403":
+          description: El rol del usuario autenticado no es TEACHER.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "INSUFFICIENT_ROLE"
+                message: "No tienes permiso para realizar esta acción"
+        "409":
+          description: El intervalo solicitado se solapa con un slot ya existente ese mismo día.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "AVAILABILITY_OVERLAP"
+                message: "El intervalo 09:00–10:00 se solapa con un slot existente (08:30–09:30)"
+
+components:
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    CreateAvailabilityInput:
+      type: object
+      required: [dayOfWeek, startTime, endTime]
+      properties:
+        dayOfWeek:
+          type: integer
+          minimum: 0
+          maximum: 6
+          description: Día de la semana (0 = domingo … 6 = sábado).
+          example: 1
+        startTime:
+          type: string
+          pattern: "^([01]\\d|2[0-3]):[0-5]\\d$"
+          description: Hora de inicio en formato `HH:mm` (24h).
+          example: "09:00"
+        endTime:
+          type: string
+          pattern: "^([01]\\d|2[0-3]):[0-5]\\d$"
+          description: Hora de fin en formato `HH:mm` (24h).
+          example: "10:00"
+
+    AvailabilitySlot:
+      type: object
+      description: Representación reducida de un slot, devuelta por GET /api/availability/me.
+      properties:
+        dayOfWeek:
+          type: integer
+          minimum: 0
+          maximum: 6
+          example: 1
+        startTime:
+          type: string
+          example: "09:00"
+        endTime:
+          type: string
+          example: "10:00"
+        isActive:
+          type: boolean
+          example: true
+
+    Availability:
+      type: object
+      description: Documento completo de Availability, devuelto por POST /api/availability.
+      properties:
+        _id:
+          type: string
+          example: "665a2c3d4e5f6a7b8c9d0e1f"
+        teacher:
+          type: string
+          description: ObjectId del profesor propietario del slot.
+          example: "663e0a1b2c3d4e5f6a7b8c9d"
+        dayOfWeek:
+          type: integer
+          minimum: 0
+          maximum: 6
+          example: 1
+        startTime:
+          type: string
+          example: "09:00"
+        endTime:
+          type: string
+          example: "10:00"
+        isActive:
+          type: boolean
+          example: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+          example: "VALIDATION_ERROR"
+        message:
+          type: string
+          example: "Datos de entrada inválidos"
+        fields:
+          type: array
+          items:
+            type: object
+            properties:
+              field:
+                type: string
+                example: "dayOfWeek"
+              message:
+                type: string
+                example: "dayOfWeek debe ser un entero entre 0 y 6"

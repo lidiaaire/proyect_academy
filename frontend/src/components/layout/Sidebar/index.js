@@ -16,13 +16,22 @@ const ADMIN_LINKS = [
   { href: '/users', label: 'Users' },
 ];
 
+const STUDENT_LINKS = [
+  { href: '/skill-radar',     label: 'Skill Radar' },
+  { href: '/achievements',    label: 'Achievements' },
+  { href: '/certificates',    label: 'Certificates' },
+  { href: '/notifications',   label: 'Notifications' },
+];
+
 export default function Sidebar() {
   const { user } = useAuth();
   const pathname = usePathname();
 
   const links = user?.role === 'admin'
     ? [...NAV_LINKS, ...ADMIN_LINKS]
-    : NAV_LINKS;
+    : user?.role === 'student'
+      ? [...NAV_LINKS, ...STUDENT_LINKS]
+      : NAV_LINKS;
 
   return (
     <aside className={styles.sidebar}>

@@ -15,6 +15,10 @@ const errorHandler = (err, req, res, next) => {
     return res.status(400).json({ error: 'INVALID_ID', message: 'El identificador proporcionado no es válido' });
   }
 
+  if (err.name === 'ValidationError') {
+    return res.status(400).json({ error: 'VALIDATION_ERROR', message: err.message });
+  }
+
   if (err.code === 11000) {
     const field = Object.keys(err.keyValue || {})[0] || 'campo';
     return res.status(409).json({ error: 'DUPLICATE_KEY', message: `Ya existe un registro con ese valor en '${field}'` });

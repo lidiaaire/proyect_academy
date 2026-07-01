@@ -6,12 +6,14 @@
  * Métodos:
  *
  *   listEnrollments(actorRole, actorId, filters)
- *     → Admin: todas con populate de student + course
- *     → Teacher: solo de sus alumnos asignados
+ *     → Admin: todas, sin restricción de scope
+ *     → Teacher: solo de sus alumnos asignados (assignedTeacherId), vía
+ *       validateTeacherScope si se filtra por studentId, o restringiendo
+ *       a su cohorte en caso contrario
  *     → Student: solo las propias
  *
  *   getEnrollmentById(actorRole, actorId, enrollmentId)
- *     → Scope por rol
+ *     → Scope por rol (Teacher vía validateTeacherScope)
  *
  *   createEnrollment(studentId, courseId)
  *     Precondiciones:
@@ -35,6 +37,7 @@ const UserRepository       = require('../../repositories/user.repository');
 const CourseRepository     = require('../../repositories/course.repository');
 const ProgressService      = require('../progress/progress.service');
 const pagination           = require('../../utils/pagination');
+const validateTeacherScope = require('../../utils/validateTeacherScope');
 const { ROLES, COURSE_STATUS, ENROLLMENT_STATUS } = require('../../config/constants');
 const {
   NotFoundError,
@@ -49,14 +52,17 @@ const getEnrollmentOrThrow = async (enrollmentId) => {
   return enrollment;
 };
 
-const assertScope = (actorRole, actorId, enrollment) => {
+const assertScope = async (actorRole, actorId, enrollment) => {
   if (actorRole === ROLES.STUDENT && enrollment.studentId.toString() !== actorId.toString()) {
     throw new ForbiddenError('FORBIDDEN', 'Solo puedes acceder a tus propias matrículas');
+  }
+  if (actorRole === ROLES.TEACHER) {
+    await validateTeacherScope(actorId, enrollment.studentId);
   }
 };
 
 const listEnrollments = async (actorRole, actorId, query = {}) => {
-  const options = pagination.toMongoOptions(pagination.build(query));
+  const options = pagination.toMongoOptions(query.page, query.limit, query.sortBy, query.sortOrder);
 
   if (actorRole === ROLES.STUDENT) {
     return EnrollmentRepository.findByStudent(actorId, options);
@@ -67,12 +73,24 @@ const listEnrollments = async (actorRole, actorId, query = {}) => {
   if (query.courseId)  filters.courseId  = query.courseId;
   if (query.status)    filters.status    = query.status;
 
+  if (actorRole === ROLES.TEACHER) {
+    if (filters.studentId) {
+      await validateTeacherScope(actorId, filters.studentId);
+    } else {
+      const { docs: cohort } = await UserRepository.findAll(
+        { assignedTeacherId: actorId, role: ROLES.STUDENT },
+        { limit: 1000 },
+      );
+      filters.studentId = { $in: cohort.map((s) => s._id) };
+    }
+  }
+
   return EnrollmentRepository.findAll(filters, options);
 };
 
 const getEnrollmentById = async (actorRole, actorId, enrollmentId) => {
   const enrollment = await getEnrollmentOrThrow(enrollmentId);
-  assertScope(actorRole, actorId, enrollment);
+  await assertScope(actorRole, actorId, enrollment);
   return enrollment;
 };
 

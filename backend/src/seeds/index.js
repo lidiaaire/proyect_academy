@@ -15,6 +15,7 @@ const COLLECTIONS = [
   'enrollments',
   'lessonprogresses',
   'assessmentattempts',
+  'achievements',
 ];
 
 const run = async () => {
@@ -44,6 +45,9 @@ const run = async () => {
 
   await require('./content/b2.seed')();
   logger.info('[seed] Curso B2 — English in Depth creado');
+
+  await require('./achievements.seed')();
+  logger.info('[seed] Achievements creados (10 logros)');
 
   // await require('./enrollments.seed')();
   // logger.info('[seed] Matrículas y progreso creados');

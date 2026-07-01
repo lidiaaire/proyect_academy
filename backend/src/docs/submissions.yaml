@@ -1,0 +1,372 @@
+openapi: 3.0.3
+
+info:
+  title: Elevate Your English — Submissions API
+  version: 1.0.0
+
+tags:
+  - name: Submissions
+    description: Gestión de entregas de tareas (Assignments) por parte de los alumnos.
+
+paths:
+
+  /api/submissions:
+    post:
+      tags: [Submissions]
+      summary: Crear una entrega
+      description: >
+        Permite a un alumno autenticado entregar una tarea (Assignment).
+        El campo `student` se extrae del JWT; cualquier valor enviado en el body
+        para ese campo es ignorado.
+
+        Validaciones aplicadas (en orden):
+        1. No existe ya una entrega del mismo alumno para la misma tarea (409).
+        2. El Assignment existe (404).
+        3. El Assignment está publicado (403).
+        4. El plazo de entrega no ha vencido (400).
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [assignment, content]
+              properties:
+                assignment:
+                  type: string
+                  description: ObjectId del Assignment al que pertenece la entrega.
+                  example: "664f1b2c3d4e5f6a7b8c9d0e"
+                content:
+                  type: string
+                  description: Texto de la entrega del alumno.
+                  example: "Mi respuesta al ejercicio de presente perfecto."
+      responses:
+        "201":
+          description: Submission creada correctamente.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Submission"
+        "400":
+          description: El plazo de entrega ha vencido.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                message: "Assignment deadline has passed"
+        "401":
+          description: Token de autenticación ausente o inválido.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: El Assignment no está publicado, o el rol del usuario no es STUDENT.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                message: "Assignment is not published"
+        "404":
+          description: El Assignment indicado no existe.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                message: "Assignment not found"
+        "409":
+          description: El alumno ya entregó esta tarea.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                message: "Submission already exists"
+
+  /api/submissions/{id}:
+    get:
+      tags: [Submissions]
+      summary: Obtener una entrega por id
+      description: Devuelve el documento completo de una Submission dado su identificador.
+      parameters:
+        - $ref: "#/components/parameters/submissionId"
+      responses:
+        "200":
+          description: Submission encontrada.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Submission"
+        "404":
+          description: No existe ninguna Submission con ese id.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                message: "Submission not found"
+
+  /api/submissions/assignment/{assignmentId}:
+    get:
+      tags: [Submissions]
+      summary: Listar entregas de una tarea (paginado)
+      description: >
+        Devuelve las Submissions asociadas a un Assignment concreto, paginadas
+        y ordenadas por `submittedAt` ascendente.
+
+        El resultado varía según el rol del usuario autenticado:
+        - **ADMIN / TEACHER**: todas las entregas del Assignment, paginadas.
+        - **STUDENT**: únicamente su propia entrega (máximo 1 elemento).
+
+        Los valores inválidos de `page` o `limit` se sustituyen por los valores
+        por defecto (`page=1`, `limit=10`). `limit` se limita a 100.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: assignmentId
+          in: path
+          required: true
+          description: ObjectId del Assignment cuyas entregas se quieren consultar.
+          schema:
+            type: string
+            example: "664f1b2c3d4e5f6a7b8c9d0e"
+        - name: page
+          in: query
+          required: false
+          description: Número de página (mínimo 1). Default 1.
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+            example: 1
+        - name: limit
+          in: query
+          required: false
+          description: Resultados por página (mínimo 1, máximo 100). Default 10.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
+            example: 10
+      responses:
+        "200":
+          description: Objeto paginado con las Submissions del Assignment.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaginatedSubmissions"
+              example:
+                items:
+                  - _id: "665a2c3d4e5f6a7b8c9d0e1f"
+                    assignment: "664f1b2c3d4e5f6a7b8c9d0e"
+                    student: "663e0a1b2c3d4e5f6a7b8c9d"
+                    content: "Mi respuesta."
+                    submittedAt: "2026-06-29T10:30:00.000Z"
+                    status: "SUBMITTED"
+                    score: null
+                    feedback: ""
+                total: 1
+                page: 1
+                pages: 1
+        "401":
+          description: Token de autenticación ausente o inválido.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: El profesor no está asignado al curso del Assignment.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                message: "Forbidden"
+        "404":
+          description: El Assignment no existe (solo aplica a rol TEACHER).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                message: "Assignment not found"
+
+  /api/submissions/{id}/grade:
+    patch:
+      tags: [Submissions]
+      summary: Calificar una entrega
+      description: >
+        Permite a un profesor o administrador calificar una Submission.
+        La entrega pasa automáticamente a estado `GRADED`.
+
+        Validaciones aplicadas (en orden):
+        1. La Submission existe (404).
+        2. La Submission no ha sido calificada ya (409).
+        3. El Assignment asociado existe (404).
+        4. Si el actor es TEACHER, debe ser el profesor asignado al curso (403).
+        5. La puntuación no supera `maxScore` del Assignment (400).
+
+        Si `score >= maxScore * 0.6`, se marca la lección asociada como completada.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/submissionId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                score:
+                  type: number
+                  minimum: 0
+                  description: Puntuación obtenida. No puede superar el maxScore del Assignment.
+                  example: 85
+                feedback:
+                  type: string
+                  description: Comentario del profesor sobre la entrega.
+                  example: "Buen uso del presente perfecto, pero revisa la pronunciación."
+      responses:
+        "200":
+          description: Submission calificada correctamente. El campo `status` siempre será `GRADED`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Submission"
+        "400":
+          description: La puntuación supera el máximo permitido por el Assignment.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                message: "Score exceeds assignment maximum"
+        "401":
+          description: Token de autenticación ausente o inválido.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: El rol no es TEACHER ni ADMIN, o el profesor no está asignado al curso.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                message: "Teacher is not assigned to this course"
+        "404":
+          description: La Submission o el Assignment asociado no existen.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                submissionNotFound:
+                  summary: Submission no encontrada
+                  value:
+                    message: "Submission not found"
+                assignmentNotFound:
+                  summary: Assignment no encontrado
+                  value:
+                    message: "Assignment not found"
+        "409":
+          description: La Submission ya fue calificada anteriormente.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                message: "Submission has already been graded"
+
+components:
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    submissionId:
+      name: id
+      in: path
+      required: true
+      description: ObjectId de la Submission.
+      schema:
+        type: string
+        example: "665a2c3d4e5f6a7b8c9d0e1f"
+
+  schemas:
+    Submission:
+      type: object
+      properties:
+        _id:
+          type: string
+          example: "665a2c3d4e5f6a7b8c9d0e1f"
+        assignment:
+          type: string
+          description: ObjectId del Assignment.
+          example: "664f1b2c3d4e5f6a7b8c9d0e"
+        student:
+          type: string
+          description: ObjectId del alumno autenticado que realizó la entrega.
+          example: "663e0a1b2c3d4e5f6a7b8c9d"
+        content:
+          type: string
+          example: "Mi respuesta al ejercicio de presente perfecto."
+        submittedAt:
+          type: string
+          format: date-time
+          example: "2026-06-29T10:30:00.000Z"
+        status:
+          type: string
+          enum: [SUBMITTED, GRADED]
+          example: "SUBMITTED"
+        score:
+          type: number
+          nullable: true
+          example: 85
+        feedback:
+          type: string
+          example: "Buen uso del presente perfecto."
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    PaginatedSubmissions:
+      type: object
+      properties:
+        items:
+          type: array
+          description: Submissions de la página solicitada.
+          items:
+            $ref: "#/components/schemas/Submission"
+        total:
+          type: integer
+          description: Total de Submissions que coinciden con el filtro.
+          example: 42
+        page:
+          type: integer
+          description: Página actual.
+          example: 1
+        pages:
+          type: integer
+          description: Total de páginas disponibles.
+          example: 5
+
+    Error:
+      type: object
+      properties:
+        message:
+          type: string

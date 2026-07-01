@@ -1,0 +1,326 @@
+openapi: 3.0.3
+
+info:
+  title: Elevate Your English — Notifications API
+  version: 1.0.0
+
+tags:
+  - name: Notifications
+    description: >
+      Gestión de notificaciones del usuario autenticado. Montado bajo
+      `/api/notifications`. No existe archivo de validación — sin
+      express-validator en ninguna ruta. Un `:id` con formato no-ObjectId
+      produce CastError → 400 `INVALID_ID` vía errorHandler.
+
+      **Sin restricción de rol:** todos los endpoints requieren solo
+      `verifyToken` (ningún `requireRole`). Cualquier usuario autenticado
+      (admin, teacher, student) puede acceder a sus propias notificaciones.
+
+paths:
+
+  /api/notifications/me:
+    get:
+      tags: [Notifications]
+      summary: Listar mis notificaciones
+      description: >
+        Devuelve todas las notificaciones del usuario autenticado,
+        ordenadas por `createdAtNotification` descendente (más recientes
+        primero). Sin paginación.
+
+        La respuesta es un **array proyectado**: el servicio mapea cada
+        documento antes de devolverlo, excluyendo el campo `user` y los
+        timestamps de Mongoose (`createdAt`, `updatedAt`). Solo se exponen
+        `_id`, `type`, `title`, `message`, `isRead`, `metadata` y
+        `createdAtNotification`.
+
+        Si el usuario no tiene notificaciones devuelve `{ notifications: [] }`.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Notificaciones del usuario autenticado.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  notifications:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/NotificationItem"
+              example:
+                notifications:
+                  - _id: "665f3e4f5a6b7c8d9e0f1b10"
+                    type: "BOOKING"
+                    title: "Booking confirmed"
+                    message: "Your lesson booking has been confirmed."
+                    isRead: false
+                    metadata:
+                      bookingId: "665a2c3d4e5f6a7b8c9d0e1f"
+                      teacherId: "663e0a1b2c3d4e5f6a7b8c9e"
+                      courseId: "662d0a1b2c3d4e5f6a7b8c9c"
+                    createdAtNotification: "2026-07-01T10:00:00.000Z"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/notifications/read-all:
+    patch:
+      tags: [Notifications]
+      summary: Marcar todas las notificaciones como leídas
+      description: >
+        Marca como `isRead: true` todas las notificaciones no leídas del
+        usuario autenticado mediante una sola operación `updateMany`.
+
+        No devuelve el número de notificaciones actualizadas — siempre
+        responde `{ success: true }` independientemente de si había
+        notificaciones pendientes o no.
+
+        Sin body.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Operación completada (haya o no notificaciones no leídas).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/notifications/{id}/read:
+    patch:
+      tags: [Notifications]
+      summary: Marcar una notificación como leída
+      description: >
+        Marca la notificación indicada como `isRead: true`.
+
+        **Ownership:** se verifica que `notification.user === userId` del
+        JWT → 403 `NOTIFICATION_FORBIDDEN` si no coincide.
+
+        **Idempotente:** si la notificación ya estaba `isRead: true`,
+        devuelve el documento actual sin modificarlo (200 sin error).
+
+        Sin body.
+
+        La respuesta devuelve el documento **completo** de Mongoose desde
+        `findByIdAndUpdate`, que incluye los campos `user`, `createdAt` y
+        `updatedAt` — a diferencia de `GET /me`, que devuelve una
+        proyección reducida sin esos campos.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/notificationId"
+      responses:
+        "200":
+          description: Notificación marcada como leída (o ya lo estaba).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  notification:
+                    $ref: "#/components/schemas/NotificationFull"
+              example:
+                notification:
+                  _id: "665f3e4f5a6b7c8d9e0f1b10"
+                  user: "663e0a1b2c3d4e5f6a7b8c9d"
+                  type: "BOOKING"
+                  title: "Booking confirmed"
+                  message: "Your lesson booking has been confirmed."
+                  isRead: true
+                  metadata:
+                    bookingId: "665a2c3d4e5f6a7b8c9d0e1f"
+                    teacherId: "663e0a1b2c3d4e5f6a7b8c9e"
+                    courseId: "662d0a1b2c3d4e5f6a7b8c9c"
+                  createdAtNotification: "2026-07-01T10:00:00.000Z"
+                  createdAt: "2026-07-01T10:00:00.000Z"
+                  updatedAt: "2026-07-01T11:00:00.000Z"
+        "400":
+          description: "`id` no es un ObjectId de MongoDB válido (CastError)."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "INVALID_ID"
+                message: "El identificador proporcionado no es válido"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: La notificación existe pero pertenece a otro usuario.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "NOTIFICATION_FORBIDDEN"
+                message: "No tienes permiso para acceder a esta notificación"
+        "404":
+          description: No existe ninguna notificación con ese id.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "NOTIFICATION_NOT_FOUND"
+                message: "Notificación no encontrada"
+
+components:
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    notificationId:
+      name: id
+      in: path
+      required: true
+      description: ObjectId de la Notification.
+      schema:
+        type: string
+        example: "665f3e4f5a6b7c8d9e0f1b10"
+
+  responses:
+    Unauthorized:
+      description: Token ausente, expirado o inválido.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          examples:
+            tokenMissing:
+              summary: Sin token
+              value:
+                error: "TOKEN_MISSING"
+                message: "Token de autenticación requerido"
+            tokenExpired:
+              summary: Token caducado
+              value:
+                error: "TOKEN_EXPIRED"
+                message: "El token ha expirado"
+            tokenInvalid:
+              summary: Token malformado
+              value:
+                error: "TOKEN_INVALID"
+                message: "Token inválido"
+
+  schemas:
+    NotificationItem:
+      type: object
+      description: >
+        Proyección reducida devuelta por `GET /me`. Excluye `user`,
+        `createdAt` y `updatedAt` — solo expone los campos útiles para
+        el cliente.
+      properties:
+        _id:
+          type: string
+          example: "665f3e4f5a6b7c8d9e0f1b10"
+        type:
+          type: string
+          enum: [ACHIEVEMENT, CERTIFICATE, BOOKING, RECOMMENDATION, SYSTEM]
+          example: "BOOKING"
+        title:
+          type: string
+          maxLength: 100
+          example: "Booking confirmed"
+        message:
+          type: string
+          maxLength: 500
+          example: "Your lesson booking has been confirmed."
+        isRead:
+          type: boolean
+          example: false
+        metadata:
+          type: object
+          description: >
+            Objeto arbitrario (`Mixed`) cuyo contenido varía según el
+            tipo de notificación. Ejemplos conocidos:
+            - `BOOKING`: `{ bookingId, teacherId, courseId }`
+            - `ACHIEVEMENT`: sin estructura definida en esta versión
+            - `CERTIFICATE`: sin estructura definida en esta versión
+          additionalProperties: true
+          example:
+            bookingId: "665a2c3d4e5f6a7b8c9d0e1f"
+            teacherId: "663e0a1b2c3d4e5f6a7b8c9e"
+            courseId: "662d0a1b2c3d4e5f6a7b8c9c"
+        createdAtNotification:
+          type: string
+          format: date-time
+          description: >
+            Fecha de creación de la notificación (campo propio del
+            modelo, distinto de `createdAt` de Mongoose timestamps).
+            Default `Date.now` al crear.
+          example: "2026-07-01T10:00:00.000Z"
+
+    NotificationFull:
+      type: object
+      description: >
+        Documento completo devuelto por `PATCH /:id/read`. Incluye
+        `user`, `createdAt` y `updatedAt` (a diferencia de la proyección
+        de `GET /me`).
+      properties:
+        _id:
+          type: string
+          example: "665f3e4f5a6b7c8d9e0f1b10"
+        user:
+          type: string
+          description: ObjectId del usuario destinatario.
+          example: "663e0a1b2c3d4e5f6a7b8c9d"
+        type:
+          type: string
+          enum: [ACHIEVEMENT, CERTIFICATE, BOOKING, RECOMMENDATION, SYSTEM]
+          example: "BOOKING"
+        title:
+          type: string
+          maxLength: 100
+          example: "Booking confirmed"
+        message:
+          type: string
+          maxLength: 500
+          example: "Your lesson booking has been confirmed."
+        isRead:
+          type: boolean
+          example: true
+        metadata:
+          type: object
+          additionalProperties: true
+          example:
+            bookingId: "665a2c3d4e5f6a7b8c9d0e1f"
+        createdAtNotification:
+          type: string
+          format: date-time
+          example: "2026-07-01T10:00:00.000Z"
+        createdAt:
+          type: string
+          format: date-time
+          description: Timestamp de Mongoose (distinto de `createdAtNotification`).
+        updatedAt:
+          type: string
+          format: date-time
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+          example: "NOTIFICATION_NOT_FOUND"
+        message:
+          type: string
+          example: "Notificación no encontrada"
+        fields:
+          type: array
+          items:
+            type: object
+            properties:
+              field:
+                type: string
+              message:
+                type: string

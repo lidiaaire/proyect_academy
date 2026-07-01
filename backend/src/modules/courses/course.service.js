@@ -56,7 +56,7 @@ const getCourseOrThrow = async (courseId) => {
 };
 
 const listCourses = async (actorRole, actorId, filters = {}, query = {}) => {
-  const options = pagination.toMongoOptions(pagination.build(query));
+  const options = pagination.toMongoOptions(query.page, query.limit, query.sortBy, query.sortOrder);
 
   if (actorRole === ROLES.STUDENT) {
     const { docs: enrollments } = await EnrollmentRepository.findAll({

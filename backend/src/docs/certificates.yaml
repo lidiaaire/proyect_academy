@@ -1,0 +1,349 @@
+openapi: 3.0.3
+
+info:
+  title: Elevate Your English — Certificates API
+  version: 1.0.0
+
+tags:
+  - name: Certificates
+    description: >
+      Emisión y consulta de certificados académicos. Montado bajo
+      `/api/certificates`. No existe archivo de validación —
+      sin express-validator en ninguna ruta. No hay `requireRole` en
+      ningún endpoint.
+
+      Los certificados se emiten automáticamente cuando un alumno completa
+      el 100 % de un curso (`ProgressService.completeLesson` →
+      `issueCertificate`). No existe endpoint de creación manual.
+
+      El PDF se genera con **pdfkit** + código QR que apunta a
+      `GET /api/certificates/verify/:certificateNumber`, y se almacena
+      en disco (`uploads/certificates/<certificateNumber>.pdf`).
+
+paths:
+
+  /api/certificates/me:
+    get:
+      tags: [Certificates]
+      summary: Listar mis certificados
+      description: >
+        Devuelve todos los certificados del usuario autenticado, ordenados
+        por `issueDate` descendente.
+
+        La respuesta proyecta un subconjunto del documento: **no incluye
+        `_id`, `student`, `createdAt` ni `updatedAt`**. El campo `course`
+        está populado con `{ _id, title, level }`.
+
+        Si el usuario no tiene certificados devuelve
+        `{ certificates: [] }`.
+
+        Solo requiere `verifyToken` (sin `requireRole`).
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Certificados del usuario autenticado.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  certificates:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/CertificateListItem"
+              example:
+                certificates:
+                  - certificateNumber: "CERT-LK8XJB3K-A7F2C"
+                    issueDate: "2026-06-30T11:00:00.000Z"
+                    finalScore: 100
+                    pdfUrl: "/uploads/certificates/CERT-LK8XJB3K-A7F2C.pdf"
+                    course:
+                      _id: "662d0a1b2c3d4e5f6a7b8c9c"
+                      title: "English Unplugged"
+                      level: "B1"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/certificates/verify/{certificateNumber}:
+    get:
+      tags: [Certificates]
+      summary: Verificar la autenticidad de un certificado (público)
+      description: >
+        Devuelve los datos públicos del certificado identificado por su
+        `certificateNumber`. **Este endpoint es público** — no requiere
+        `verifyToken` ni ningún tipo de autenticación. Está pensado para
+        ser accedido desde el código QR del PDF del certificado.
+
+        La respuesta incluye nombre del alumno y datos del curso, pero
+        **no expone el email ni el ObjectId** del alumno.
+
+        `certificateNumber` es un string — sin validación de formato.
+        Un número inexistente produce 404 (no 400).
+      parameters:
+        - $ref: "#/components/parameters/certificateNumber"
+      responses:
+        "200":
+          description: Certificado encontrado y datos públicos de verificación.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  certificate:
+                    $ref: "#/components/schemas/CertificateVerification"
+              example:
+                certificate:
+                  certificateNumber: "CERT-LK8XJB3K-A7F2C"
+                  issueDate: "2026-06-30T11:00:00.000Z"
+                  finalScore: 100
+                  student:
+                    firstName: "Jane"
+                    lastName: "Doe"
+                  course:
+                    title: "English Unplugged"
+                    level: "B1"
+        "404":
+          description: No existe ningún certificado con ese número.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "CERTIFICATE_NOT_FOUND"
+                message: "Certificado no encontrado"
+
+  /api/certificates/{id}/download:
+    get:
+      tags: [Certificates]
+      summary: Descargar el PDF de un certificado
+      description: >
+        Descarga el archivo PDF del certificado indicado por su ObjectId.
+        La respuesta es un **stream de fichero binario**, no JSON:
+
+        - `Content-Type: application/pdf`
+        - `Content-Disposition: attachment; filename="<certificateNumber>.pdf"`
+
+        Precondiciones (en orden):
+        1. El certificado debe existir → 404 `CERTIFICATE_NOT_FOUND`.
+        2. `certificate.student === userId` del JWT → 403
+           `CERTIFICATE_FORBIDDEN`.
+        3. `certificate.pdfUrl` debe ser no-null → 404
+           `CERTIFICATE_PDF_NOT_FOUND` (caso improbable si la emisión se
+           completó correctamente, pero posible si el PDF no se generó por
+           un error en el flujo de emisión).
+
+        **Sin `validate` middleware:** un `:id` con formato no-ObjectId
+        produce CastError → 400 `INVALID_ID` vía errorHandler, con
+        body JSON (no binario).
+
+        Solo requiere `verifyToken` (sin `requireRole`).
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/certificateId"
+      responses:
+        "200":
+          description: Fichero PDF del certificado.
+          content:
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+        "400":
+          description: "`id` no es un ObjectId de MongoDB válido (CastError)."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "INVALID_ID"
+                message: "El identificador proporcionado no es válido"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: El certificado pertenece a otro usuario.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "CERTIFICATE_FORBIDDEN"
+                message: "No tienes acceso a este certificado"
+        "404":
+          description: Certificado no encontrado, o su PDF no está disponible.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                notFound:
+                  summary: Certificado no encontrado
+                  value:
+                    error: "CERTIFICATE_NOT_FOUND"
+                    message: "Certificado no encontrado"
+                pdfNotFound:
+                  summary: PDF no disponible (emisión incompleta)
+                  value:
+                    error: "CERTIFICATE_PDF_NOT_FOUND"
+                    message: "El PDF de este certificado no está disponible"
+
+components:
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    certificateNumber:
+      name: certificateNumber
+      in: path
+      required: true
+      description: >
+        Número único del certificado. Formato generado por el sistema:
+        `CERT-<timestamp_base36>-<5chars_base36>` (p. ej.
+        `CERT-LK8XJB3K-A7F2C`). Sin validación de formato — cualquier
+        string produce búsqueda por coincidencia exacta.
+      schema:
+        type: string
+        example: "CERT-LK8XJB3K-A7F2C"
+    certificateId:
+      name: id
+      in: path
+      required: true
+      description: ObjectId del Certificate.
+      schema:
+        type: string
+        example: "665f3e4f5a6b7c8d9e0f1b20"
+
+  responses:
+    Unauthorized:
+      description: Token ausente, expirado o inválido.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          examples:
+            tokenMissing:
+              summary: Sin token
+              value:
+                error: "TOKEN_MISSING"
+                message: "Token de autenticación requerido"
+            tokenExpired:
+              summary: Token caducado
+              value:
+                error: "TOKEN_EXPIRED"
+                message: "El token ha expirado"
+            tokenInvalid:
+              summary: Token malformado
+              value:
+                error: "TOKEN_INVALID"
+                message: "Token inválido"
+
+  schemas:
+    CertificateListItem:
+      type: object
+      description: >
+        Proyección devuelta por `GET /me`. No incluye `_id`, `student`,
+        `createdAt` ni `updatedAt`. `course` está populado con
+        `{ _id, title, level }`.
+      properties:
+        certificateNumber:
+          type: string
+          description: Identificador único legible. Formato `CERT-<base36>-<base36>`.
+          example: "CERT-LK8XJB3K-A7F2C"
+        issueDate:
+          type: string
+          format: date-time
+          description: "Fecha de emisión. `default: Date.now` al crear."
+          example: "2026-06-30T11:00:00.000Z"
+        finalScore:
+          type: number
+          minimum: 0
+          maximum: 100
+          description: Porcentaje de completado del curso en el momento de emisión.
+          example: 100
+        pdfUrl:
+          type: string
+          nullable: true
+          description: >
+            Ruta relativa al PDF en el servidor
+            (`/uploads/certificates/<certificateNumber>.pdf`). Puede ser
+            `null` en el caso improbable de que la generación del PDF
+            fallara tras la creación del certificado.
+          example: "/uploads/certificates/CERT-LK8XJB3K-A7F2C.pdf"
+        course:
+          type: object
+          properties:
+            _id:
+              type: string
+              example: "662d0a1b2c3d4e5f6a7b8c9c"
+            title:
+              type: string
+              example: "English Unplugged"
+            level:
+              type: string
+              enum: [A1, A2, B1, B2, C1, C2]
+              example: "B1"
+
+    CertificateVerification:
+      type: object
+      description: >
+        Datos públicos de verificación devueltos por `GET
+        /verify/:certificateNumber`. No expone el `_id` ni el email del
+        alumno.
+      properties:
+        certificateNumber:
+          type: string
+          example: "CERT-LK8XJB3K-A7F2C"
+        issueDate:
+          type: string
+          format: date-time
+          example: "2026-06-30T11:00:00.000Z"
+        finalScore:
+          type: number
+          minimum: 0
+          maximum: 100
+          example: 100
+        student:
+          type: object
+          description: Solo `firstName` y `lastName` del alumno.
+          properties:
+            firstName:
+              type: string
+              example: "Jane"
+            lastName:
+              type: string
+              example: "Doe"
+        course:
+          type: object
+          description: Solo `title` y `level` del curso.
+          properties:
+            title:
+              type: string
+              example: "English Unplugged"
+            level:
+              type: string
+              enum: [A1, A2, B1, B2, C1, C2]
+              example: "B1"
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+          example: "CERTIFICATE_NOT_FOUND"
+        message:
+          type: string
+          example: "Certificado no encontrado"
+        fields:
+          type: array
+          items:
+            type: object
+            properties:
+              field:
+                type: string
+              message:
+                type: string

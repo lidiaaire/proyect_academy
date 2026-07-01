@@ -1,0 +1,435 @@
+openapi: 3.0.3
+
+info:
+  title: Elevate Your English — Bookings API
+  version: 1.0.0
+
+tags:
+  - name: Bookings
+    description: >
+      Gestión de reservas de clases (Bookings) entre alumnos y profesores.
+      Solo se documentan los endpoints realmente montados en
+      `booking.routes.js`. Los handlers `list`, `getById` y `create` existen
+      en el controller pero no están registrados en el router (devuelven
+      501 `NOT_IMPLEMENTED` y no son alcanzables) y por tanto no se documentan
+      aquí.
+
+paths:
+
+  /api/bookings/me:
+    get:
+      tags: [Bookings]
+      summary: Listar mis reservas como alumno
+      description: >
+        Devuelve las reservas donde el usuario autenticado es el `student`,
+        ordenadas por `bookingDate` descendente y, dentro de la misma fecha,
+        por `startTime` descendente. `teacher` y `course` se devuelven
+        populados con datos reducidos.
+
+        No hay restricción de rol a nivel de ruta (solo `verifyToken`): la
+        consulta filtra siempre por `student = req.user.userId`, por lo que
+        un usuario con rol distinto de STUDENT simplemente no tendrá reservas
+        propias como alumno y recibirá una lista vacía.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Lista de reservas del usuario autenticado como alumno.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  bookings:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/BookingWithPopulated"
+              example:
+                bookings:
+                  - _id: "665a2c3d4e5f6a7b8c9d0e1f"
+                    bookingDate: "2026-07-02T00:00:00.000Z"
+                    startTime: "09:00"
+                    endTime: "10:00"
+                    status: "CONFIRMED"
+                    notes: ""
+                    teacher:
+                      _id: "663e0a1b2c3d4e5f6a7b8c9d"
+                      firstName: "Jane"
+                      lastName: "Doe"
+                    course:
+                      _id: "662d0a1b2c3d4e5f6a7b8c9c"
+                      title: "English Unplugged"
+                      level: "B1"
+        "401":
+          description: Token de autenticación ausente o inválido.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "TOKEN_MISSING"
+                message: "Token de autenticación requerido"
+
+  /api/bookings/{id}/confirm:
+    patch:
+      tags: [Bookings]
+      summary: Confirmar una reserva
+      description: >
+        Cambia el estado de una reserva a `CONFIRMED`. Si ya estaba en
+        `CONFIRMED`, la operación es idempotente y devuelve la reserva sin
+        modificarla (200).
+
+        Como efecto colateral, si no existe ya una LiveSession asociada a la
+        reserva, se crea una nueva (provider `JITSI`, status `SCHEDULED`), y
+        se envía una notificación al alumno.
+
+        Restricciones de autorización:
+        - Rol requerido a nivel de ruta: ADMIN o TEACHER.
+        - Si el actor es TEACHER, además debe ser el profesor (`teacher`) de
+          la reserva; en caso contrario se rechaza con 403.
+        - ADMIN puede confirmar cualquier reserva.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/bookingId"
+      responses:
+        "200":
+          description: Reserva confirmada (o ya estaba confirmada).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  booking:
+                    $ref: "#/components/schemas/Booking"
+              example:
+                booking:
+                  _id: "665a2c3d4e5f6a7b8c9d0e1f"
+                  student: "663e0a1b2c3d4e5f6a7b8c9d"
+                  teacher: "663e0a1b2c3d4e5f6a7b8c9e"
+                  course: "662d0a1b2c3d4e5f6a7b8c9c"
+                  bookingDate: "2026-07-02T00:00:00.000Z"
+                  startTime: "09:00"
+                  endTime: "10:00"
+                  status: "CONFIRMED"
+                  notes: ""
+                  createdAt: "2026-06-29T10:30:00.000Z"
+                  updatedAt: "2026-06-30T08:00:00.000Z"
+        "401":
+          description: Token de autenticación ausente o inválido.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "TOKEN_MISSING"
+                message: "Token de autenticación requerido"
+        "403":
+          description: >
+            El rol del usuario no es ADMIN ni TEACHER, o es TEACHER pero no
+            es el profesor asignado a esta reserva.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                insufficientRole:
+                  summary: Rol no permitido en la ruta
+                  value:
+                    error: "INSUFFICIENT_ROLE"
+                    message: "No tienes permiso para realizar esta acción"
+                notOwner:
+                  summary: Teacher no es el dueño de la reserva
+                  value:
+                    error: "BOOKING_FORBIDDEN"
+                    message: "No tienes permiso para confirmar esta reserva"
+        "404":
+          description: No existe ninguna reserva con ese id.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "BOOKING_NOT_FOUND"
+                message: "Reserva no encontrada"
+
+  /api/bookings/{id}/complete:
+    patch:
+      tags: [Bookings]
+      summary: Marcar una reserva como completada
+      description: >
+        Cambia el estado de una reserva a `COMPLETED`. Si ya estaba en
+        `COMPLETED`, la operación es idempotente y devuelve la reserva sin
+        modificarla (200).
+
+        Restricciones de autorización:
+        - Rol requerido a nivel de ruta: ADMIN o TEACHER.
+        - Si el actor es TEACHER, además debe ser el profesor (`teacher`) de
+          la reserva; en caso contrario se rechaza con 403.
+        - ADMIN puede completar cualquier reserva.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/bookingId"
+      responses:
+        "200":
+          description: Reserva completada (o ya estaba completada).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  booking:
+                    $ref: "#/components/schemas/Booking"
+              example:
+                booking:
+                  _id: "665a2c3d4e5f6a7b8c9d0e1f"
+                  student: "663e0a1b2c3d4e5f6a7b8c9d"
+                  teacher: "663e0a1b2c3d4e5f6a7b8c9e"
+                  course: "662d0a1b2c3d4e5f6a7b8c9c"
+                  bookingDate: "2026-07-02T00:00:00.000Z"
+                  startTime: "09:00"
+                  endTime: "10:00"
+                  status: "COMPLETED"
+                  notes: ""
+                  createdAt: "2026-06-29T10:30:00.000Z"
+                  updatedAt: "2026-07-02T10:05:00.000Z"
+        "401":
+          description: Token de autenticación ausente o inválido.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "TOKEN_MISSING"
+                message: "Token de autenticación requerido"
+        "403":
+          description: >
+            El rol del usuario no es ADMIN ni TEACHER, o es TEACHER pero no
+            es el profesor asignado a esta reserva.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                insufficientRole:
+                  summary: Rol no permitido en la ruta
+                  value:
+                    error: "INSUFFICIENT_ROLE"
+                    message: "No tienes permiso para realizar esta acción"
+                notOwner:
+                  summary: Teacher no es el dueño de la reserva
+                  value:
+                    error: "BOOKING_FORBIDDEN"
+                    message: "No tienes permiso para completar esta reserva"
+        "404":
+          description: No existe ninguna reserva con ese id.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "BOOKING_NOT_FOUND"
+                message: "Reserva no encontrada"
+
+  /api/bookings/{id}/cancel:
+    patch:
+      tags: [Bookings]
+      summary: Cancelar una reserva
+      description: >
+        Cambia el estado de una reserva a `CANCELLED`. Si ya estaba en
+        `CANCELLED`, la operación es idempotente y devuelve la reserva sin
+        modificarla (200).
+
+        Sin restricción de rol a nivel de ruta (solo `verifyToken`).
+        Restricciones de autorización (en service):
+        - ADMIN puede cancelar cualquier reserva.
+        - Cualquier otro rol solo puede cancelar la reserva si es el
+          `student` o el `teacher` de la misma; en caso contrario se rechaza
+          con 403.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/bookingId"
+      responses:
+        "200":
+          description: Reserva cancelada (o ya estaba cancelada).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  booking:
+                    $ref: "#/components/schemas/Booking"
+              example:
+                booking:
+                  _id: "665a2c3d4e5f6a7b8c9d0e1f"
+                  student: "663e0a1b2c3d4e5f6a7b8c9d"
+                  teacher: "663e0a1b2c3d4e5f6a7b8c9e"
+                  course: "662d0a1b2c3d4e5f6a7b8c9c"
+                  bookingDate: "2026-07-02T00:00:00.000Z"
+                  startTime: "09:00"
+                  endTime: "10:00"
+                  status: "CANCELLED"
+                  notes: ""
+                  createdAt: "2026-06-29T10:30:00.000Z"
+                  updatedAt: "2026-06-30T09:15:00.000Z"
+        "401":
+          description: Token de autenticación ausente o inválido.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "TOKEN_MISSING"
+                message: "Token de autenticación requerido"
+        "403":
+          description: El usuario no es ADMIN ni el alumno/profesor de la reserva.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "BOOKING_FORBIDDEN"
+                message: "No tienes permiso para cancelar esta reserva"
+        "404":
+          description: No existe ninguna reserva con ese id.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "BOOKING_NOT_FOUND"
+                message: "Reserva no encontrada"
+
+components:
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    bookingId:
+      name: id
+      in: path
+      required: true
+      description: ObjectId de la Booking.
+      schema:
+        type: string
+        example: "665a2c3d4e5f6a7b8c9d0e1f"
+
+  schemas:
+    Booking:
+      type: object
+      properties:
+        _id:
+          type: string
+          example: "665a2c3d4e5f6a7b8c9d0e1f"
+        student:
+          type: string
+          description: ObjectId del alumno que realizó la reserva.
+          example: "663e0a1b2c3d4e5f6a7b8c9d"
+        teacher:
+          type: string
+          description: ObjectId del profesor asignado a la reserva.
+          example: "663e0a1b2c3d4e5f6a7b8c9e"
+        course:
+          type: string
+          description: ObjectId del curso asociado.
+          example: "662d0a1b2c3d4e5f6a7b8c9c"
+        bookingDate:
+          type: string
+          format: date-time
+          example: "2026-07-02T00:00:00.000Z"
+        startTime:
+          type: string
+          example: "09:00"
+        endTime:
+          type: string
+          example: "10:00"
+        status:
+          type: string
+          enum: [PENDING, CONFIRMED, CANCELLED, COMPLETED]
+          example: "CONFIRMED"
+        notes:
+          type: string
+          example: ""
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    BookingWithPopulated:
+      type: object
+      description: >
+        Forma reducida de Booking devuelta por GET /api/bookings/me:
+        `teacher` y `course` vienen populados con campos limitados en lugar
+        de ser un ObjectId plano.
+      properties:
+        _id:
+          type: string
+          example: "665a2c3d4e5f6a7b8c9d0e1f"
+        bookingDate:
+          type: string
+          format: date-time
+          example: "2026-07-02T00:00:00.000Z"
+        startTime:
+          type: string
+          example: "09:00"
+        endTime:
+          type: string
+          example: "10:00"
+        status:
+          type: string
+          enum: [PENDING, CONFIRMED, CANCELLED, COMPLETED]
+          example: "CONFIRMED"
+        notes:
+          type: string
+          example: ""
+        teacher:
+          type: object
+          properties:
+            _id:
+              type: string
+              example: "663e0a1b2c3d4e5f6a7b8c9e"
+            firstName:
+              type: string
+              example: "Jane"
+            lastName:
+              type: string
+              example: "Doe"
+        course:
+          type: object
+          properties:
+            _id:
+              type: string
+              example: "662d0a1b2c3d4e5f6a7b8c9c"
+            title:
+              type: string
+              example: "English Unplugged"
+            level:
+              type: string
+              example: "B1"
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+          example: "BOOKING_NOT_FOUND"
+        message:
+          type: string
+          example: "Reserva no encontrada"
+        fields:
+          type: array
+          items:
+            type: object
+            properties:
+              field:
+                type: string
+              message:
+                type: string

@@ -11,6 +11,7 @@
  *     → Student: excluye correctAnswer + verifica que todas las lecciones de la unidad están completadas
  *
  *   createAssessment(courseId, unitId, data)
+ *     → ForbiddenError si el curso está archivado (mismo guard que createUnit/createLesson)
  *     → ConflictError si ya existe un assessment para esa unidad
  *
  *   updateAssessment(courseId, unitId, data)
@@ -43,6 +44,7 @@ const LessonRepository            = require('../../repositories/lesson.repositor
 const LessonProgressRepository    = require('../../repositories/lessonProgress.repository');
 const EnrollmentRepository        = require('../../repositories/enrollment.repository');
 const { ROLES, COURSE_STATUS, PROGRESS_STATUS, ENROLLMENT_STATUS } = require('../../config/constants');
+const achievementService = require('../achievements/achievement.service');
 const {
   NotFoundError,
   ForbiddenError,
@@ -103,7 +105,10 @@ const getAssessment = async (actorRole, actorId, courseId, unitId) => {
 };
 
 const createAssessment = async (courseId, unitId, data) => {
-  await getCourseOrThrow(courseId);
+  const course = await getCourseOrThrow(courseId);
+  if (course.status === COURSE_STATUS.ARCHIVED) {
+    throw new ForbiddenError('COURSE_ARCHIVED', 'No se pueden añadir assessments a un curso archivado');
+  }
   await getUnitOrThrow(courseId, unitId);
 
   const existing = await AssessmentRepository.findByUnitId(unitId);
@@ -133,6 +138,8 @@ const deleteAssessment = async (courseId, unitId) => {
 };
 
 const submitAttempt = async (studentId, courseId, unitId, answers) => {
+  await getUnitOrThrow(courseId, unitId);
+
   const enrollment = await EnrollmentRepository.findOne({ studentId, courseId, status: ENROLLMENT_STATUS.ACTIVE });
   if (!enrollment) throw new ForbiddenError('NOT_ENROLLED', 'No tienes matrícula activa en este curso');
 
@@ -161,7 +168,7 @@ const submitAttempt = async (studentId, courseId, unitId, answers) => {
   const score        = Math.floor((earnedPoints / totalPoints) * 100);
   const passed       = score >= assessment.passingScore;
 
-  return AssessmentAttemptRepository.create({
+  const attempt = await AssessmentAttemptRepository.create({
     assessmentId:  assessment._id,
     studentId,
     attemptNumber: attemptCount + 1,
@@ -170,6 +177,12 @@ const submitAttempt = async (studentId, courseId, unitId, answers) => {
     passed,
     submittedAt:   new Date(),
   });
+
+  if (score === 100) {
+    await achievementService.unlockAchievement(studentId, 'perfect_assessment');
+  }
+
+  return attempt;
 };
 
 const listAttempts = async (actorRole, actorId, courseId, unitId) => {

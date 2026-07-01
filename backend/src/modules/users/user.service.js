@@ -10,6 +10,7 @@ const { ConflictError,
         ForbiddenError,
         UnprocessableError }        = require('../../utils/ApiError');
 const { ROLES }                     = require('../../config/constants');
+const achievementService            = require('../achievements/achievement.service');
 
 const BCRYPT_ROUNDS = 10;
 
@@ -59,7 +60,7 @@ const createUser = async (data) => {
 
   const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
 
-  const user = await userRepository.create({
+  const created = await userRepository.create({
     firstName,
     lastName,
     email,
@@ -74,7 +75,11 @@ const createUser = async (data) => {
   // para garantizar atomicidad. La estrategia de compensación se diseña
   // en esa fase — no se implementa aquí para no acoplar módulos prematuramente.
 
-  return user;
+  await achievementService.unlockAchievement(created._id, 'welcome_to_elevate');
+
+  // Re-query para que select:false del schema excluya passwordHash de la respuesta.
+  // Model.create() devuelve el documento completo ignorando select:false.
+  return userRepository.findById(created._id);
 };
 
 // ---------------------------------------------------------------------------
@@ -101,7 +106,7 @@ const listUsers = async (filters, paginationOpts, currentUser) => {
   // Los teachers solo pueden ver sus propios alumnos activos.
   // Se ignoran los filtros del request para prevenir acceso a datos ajenos.
   const query = currentUser.role === ROLES.TEACHER
-    ? { role: ROLES.STUDENT, assignedTeacherId: currentUser._id, isActive: true }
+    ? { role: ROLES.STUDENT, assignedTeacherId: currentUser.userId, isActive: true }
     : buildAdminQuery(filters);
 
   const mongoOptions          = toMongoOptions(page, limit, sortBy, sortOrder);
@@ -164,7 +169,13 @@ const updateUser = async (id, data) => {
     }
   }
 
-  return userRepository.updateProfile(id, data);
+  const updated = await userRepository.updateProfile(id, data);
+
+  if (updated.firstName && updated.lastName && updated.avatarUrl) {
+    await achievementService.unlockAchievement(updated._id, 'profile_completed');
+  }
+
+  return updated;
 };
 
 // ---------------------------------------------------------------------------

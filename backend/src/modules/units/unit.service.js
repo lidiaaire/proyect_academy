@@ -12,10 +12,12 @@
  *   deleteUnit(courseId, unitId)                → solo en draft; cascade lessons + assessment
  */
 
-const UnitRepository       = require('../../repositories/unit.repository');
-const CourseRepository     = require('../../repositories/course.repository');
-const LessonRepository     = require('../../repositories/lesson.repository');
-const EnrollmentRepository = require('../../repositories/enrollment.repository');
+const UnitRepository               = require('../../repositories/unit.repository');
+const CourseRepository             = require('../../repositories/course.repository');
+const LessonRepository             = require('../../repositories/lesson.repository');
+const EnrollmentRepository         = require('../../repositories/enrollment.repository');
+const AssessmentRepository         = require('../../repositories/assessment.repository');
+const AssessmentAttemptRepository  = require('../../repositories/assessmentAttempt.repository');
 const { ROLES, COURSE_STATUS } = require('../../config/constants');
 const {
   NotFoundError,
@@ -99,6 +101,13 @@ const deleteUnit = async (courseId, unitId) => {
   }
   await getUnitOrThrow(courseId, unitId);
   await LessonRepository.deleteAllByUnit(unitId);
+
+  const assessment = await AssessmentRepository.findByUnitId(unitId);
+  if (assessment) {
+    await AssessmentAttemptRepository.deleteAllByAssessment(assessment._id);
+    await AssessmentRepository.deleteByUnitId(unitId);
+  }
+
   await UnitRepository.deleteById(unitId);
 };
 

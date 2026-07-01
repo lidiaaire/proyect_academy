@@ -1,0 +1,173 @@
+openapi: 3.0.3
+
+info:
+  title: Elevate Your English — Recommendations API
+  version: 1.0.0
+
+tags:
+  - name: Recommendations
+    description: >
+      Recomendaciones de cursos para el usuario autenticado. Montado bajo
+      `/api/recommendations`. Solo expone un endpoint de lectura —
+      las recomendaciones se crean internamente por el sistema (no existe
+      endpoint de creación manual). Sigue el mismo patrón que
+      `achievements/me`, `certificates/me` y `notifications/me`: solo
+      `verifyToken`, sin `requireRole`.
+
+paths:
+
+  /api/recommendations/me:
+    get:
+      tags: [Recommendations]
+      summary: Listar mis recomendaciones de cursos
+      description: >
+        Devuelve todas las recomendaciones de cursos del usuario autenticado,
+        ordenadas por `createdAtRecommendation` descendente (más reciente
+        primero).
+
+        La respuesta proyecta un subconjunto del documento — **no incluye
+        `_id`, `student`, `createdAt` ni `updatedAt`**. El campo `course`
+        está populado con `{ _id, title, level, description }`.
+
+        El `status` refleja si el usuario ha actuado sobre la recomendación.
+        Sin embargo, **no existe ningún endpoint HTTP para actualizar el
+        `status`** — el cambio de `PENDING` a `ACCEPTED` o `DISMISSED` no
+        está expuesto en esta versión.
+
+        Si el usuario no tiene recomendaciones devuelve
+        `{ recommendations: [] }`.
+
+        Existe máximo una recomendación por combinación
+        `student + course` (índice `unique`): si el sistema intenta crear
+        una segunda para el mismo par, devuelve la existente sin duplicar.
+
+        Solo requiere `verifyToken` (sin `requireRole`). Cualquier rol
+        autenticado puede acceder.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Recomendaciones del usuario autenticado.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  recommendations:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/RecommendationItem"
+              example:
+                recommendations:
+                  - reason: "You have completed A1 level. We recommend the next course."
+                    priority: "HIGH"
+                    status: "PENDING"
+                    createdAtRecommendation: "2026-06-30T12:00:00.000Z"
+                    course:
+                      _id: "662d0a1b2c3d4e5f6a7b8c9c"
+                      title: "English Every Day"
+                      level: "A2"
+                      description: "Curso de nivel A2 centrado en conversación cotidiana."
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+components:
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  responses:
+    Unauthorized:
+      description: Token ausente, expirado o inválido.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          examples:
+            tokenMissing:
+              summary: Sin token
+              value:
+                error: "TOKEN_MISSING"
+                message: "Token de autenticación requerido"
+            tokenExpired:
+              summary: Token caducado
+              value:
+                error: "TOKEN_EXPIRED"
+                message: "El token ha expirado"
+            tokenInvalid:
+              summary: Token malformado
+              value:
+                error: "TOKEN_INVALID"
+                message: "Token inválido"
+
+  schemas:
+    RecommendationItem:
+      type: object
+      description: >
+        Proyección de una recomendación. No incluye `_id`, `student`,
+        `createdAt` ni `updatedAt`. `course` está populado con
+        `{ _id, title, level, description }`.
+      properties:
+        reason:
+          type: string
+          maxLength: 300
+          description: Motivo de la recomendación, generado por el sistema.
+          example: "You have completed A1 level. We recommend the next course."
+        priority:
+          type: string
+          enum: [LOW, MEDIUM, HIGH]
+          description: Prioridad de la recomendación. Default `MEDIUM` al crear.
+          example: "HIGH"
+        status:
+          type: string
+          enum: [PENDING, ACCEPTED, DISMISSED]
+          description: >
+            Estado de la recomendación. Siempre `PENDING` en esta versión
+            — no existe endpoint HTTP para actualizar el estado.
+          example: "PENDING"
+        createdAtRecommendation:
+          type: string
+          format: date-time
+          description: >
+            Fecha de creación de la recomendación (campo propio del modelo,
+            distinto de `createdAt` de Mongoose timestamps).
+          example: "2026-06-30T12:00:00.000Z"
+        course:
+          type: object
+          description: Curso recomendado, populado con campos básicos.
+          properties:
+            _id:
+              type: string
+              example: "662d0a1b2c3d4e5f6a7b8c9c"
+            title:
+              type: string
+              example: "English Every Day"
+            level:
+              type: string
+              enum: [A1, A2, B1, B2, C1, C2]
+              example: "A2"
+            description:
+              type: string
+              example: "Curso de nivel A2 centrado en conversación cotidiana."
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+          example: "TOKEN_MISSING"
+        message:
+          type: string
+          example: "Token de autenticación requerido"
+        fields:
+          type: array
+          items:
+            type: object
+            properties:
+              field:
+                type: string
+              message:
+                type: string

@@ -53,6 +53,11 @@ const userSchema = new Schema(
       type:    Date,
       default: null,
     },
+    achievementPoints: {
+      type:    Number,
+      default: 0,
+      min:     0,
+    },
   },
   { timestamps: true }
 );

@@ -58,6 +58,14 @@ class UserRepository extends BaseRepository {
     return super.findAll(query, options);
   }
 
+  async incrementPoints(id, points) {
+    return this.model.findByIdAndUpdate(
+      id,
+      { $inc: { achievementPoints: points } },
+      { new: true, select: 'achievementPoints' },
+    );
+  }
+
   // Actualiza campos de perfil seguros. Whitelist por destructuring: passwordHash,
   // role y _id no pueden actualizarse por esta vía aunque se pasen en data.
   // BaseRepository.updateById aplica $set + runValidators, garantizando B1 (avatarUrl regex).

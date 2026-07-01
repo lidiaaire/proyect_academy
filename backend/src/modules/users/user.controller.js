@@ -89,11 +89,11 @@ const activateUser = asyncHandler(async (req, res) => {
 
 // ---------------------------------------------------------------------------
 // deactivateUser — PATCH /api/users/:id/deactivate
-// currentUserId viene de req.user._id (puesto por verifyToken), nunca del body.
+// currentUserId viene de req.user.userId (puesto por verifyToken), nunca del body.
 // Garantiza que la protección de auto-desactivación no puede ser bypasseada.
 // ---------------------------------------------------------------------------
 const deactivateUser = asyncHandler(async (req, res) => {
-  const user = await userService.deactivateUser(req.params.id, req.user._id);
+  const user = await userService.deactivateUser(req.params.id, req.user.userId);
   res.json({ user });
 });
 

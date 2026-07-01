@@ -1,0 +1,419 @@
+openapi: 3.0.3
+
+info:
+  title: Elevate Your English — Attendance API
+  version: 1.0.0
+
+tags:
+  - name: Attendance
+    description: >
+      Consulta y registro de asistencia (join/leave) de alumnos a una
+      LiveSession.
+
+paths:
+
+  /api/attendance/session/{sessionId}:
+    get:
+      tags: [Attendance]
+      summary: Listar los registros de asistencia de una sesión
+      description: >
+        Devuelve **todos** los registros de Attendance de la LiveSession
+        indicada, ordenados por `createdAt` ascendente, como un **array
+        JSON plano** (no envuelto en `{ records: [...] }` ni similar —
+        inconsistente con el resto de la API, que normalmente envuelve sus
+        listados).
+
+        Si la sesión no tiene ningún registro de asistencia todavía, se
+        devuelve **200 con un array vacío `[]`**, no un 404 (el 404 de esta
+        ruta solo se produce si la LiveSession en sí no existe, comprobado
+        por `canAccessAttendance`).
+
+        Esta ruta no incluye `:studentId` en el path, por lo que la
+        restricción de ownership de alumno (ver "Autorización común") no
+        aplica aquí: cualquier admin, o el alumno/profesor de la booking
+        asociada, puede listar todos los registros de la sesión.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/sessionId"
+      responses:
+        "200":
+          description: Array de registros de asistencia (puede estar vacío).
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Attendance"
+              example:
+                - _id: "665a2c3d4e5f6a7b8c9d0e20"
+                  liveSession: "665a2c3d4e5f6a7b8c9d0e1f"
+                  student: "663e0a1b2c3d4e5f6a7b8c9d"
+                  status: "PRESENT"
+                  joinedAt: "2026-07-02T09:00:10.000Z"
+                  leftAt: "2026-07-02T09:54:00.000Z"
+                  durationMinutes: 53
+                  createdAt: "2026-07-02T09:00:05.000Z"
+                  updatedAt: "2026-07-02T09:54:00.000Z"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/SessionOrBookingNotFound"
+
+  /api/attendance/session/{sessionId}/student/{studentId}:
+    get:
+      tags: [Attendance]
+      summary: Obtener el registro de asistencia de un alumno en una sesión
+      description: >
+        Devuelve el registro de Attendance del alumno indicado para la
+        LiveSession indicada.
+
+        Autorización: ver "Autorización común". Al incluir `:studentId` en
+        el path, se aplica además la restricción de ownership de alumno: si
+        el rol del actor es STUDENT, `studentId` debe coincidir con su
+        propio id.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/sessionId"
+        - $ref: "#/components/parameters/studentId"
+      responses:
+        "200":
+          description: Registro de asistencia encontrado.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Attendance"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          description: >
+            No existe LiveSession con ese id, no existe la Booking asociada
+            (caso teórico), o no existe ningún registro de Attendance para
+            ese alumno en esa sesión.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RawMessageError"
+              examples:
+                sessionNotFound:
+                  summary: La LiveSession no existe
+                  value:
+                    message: "Live session not found"
+                bookingNotFound:
+                  summary: Booking referenciada inexistente (caso teórico)
+                  value:
+                    message: "Booking not found"
+                recordNotFound:
+                  summary: No hay registro de Attendance para ese alumno/sesión
+                  value:
+                    message: "Attendance record not found"
+
+  /api/attendance/session/{sessionId}/student/{studentId}/join:
+    post:
+      tags: [Attendance]
+      summary: Marcar la entrada de un alumno a la sesión
+      description: >
+        Marca el registro de Attendance del alumno como `PRESENT` y fija
+        `joinedAt` a la fecha/hora actual.
+
+        El registro de Attendance debe existir previamente — se crea
+        automáticamente con `status: ABSENT` al hacer `start` de la
+        LiveSession (ver `liveSessions.yaml`), nunca en este endpoint.
+
+        Autorización: ver "Autorización común", incluida la restricción de
+        ownership de alumno por `:studentId`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/sessionId"
+        - $ref: "#/components/parameters/studentId"
+      responses:
+        "200":
+          description: Asistencia marcada como PRESENT con `joinedAt` actualizado.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Attendance"
+              example:
+                _id: "665a2c3d4e5f6a7b8c9d0e20"
+                liveSession: "665a2c3d4e5f6a7b8c9d0e1f"
+                student: "663e0a1b2c3d4e5f6a7b8c9d"
+                status: "PRESENT"
+                joinedAt: "2026-07-02T09:00:10.000Z"
+                leftAt: null
+                durationMinutes: 0
+                createdAt: "2026-07-02T09:00:05.000Z"
+                updatedAt: "2026-07-02T09:00:10.000Z"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          description: >
+            No existe LiveSession con ese id, no existe la Booking asociada
+            (caso teórico), o no existe registro de Attendance previo para
+            ese alumno/sesión (no se crea bajo demanda en este endpoint).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RawMessageError"
+              examples:
+                sessionNotFound:
+                  summary: La LiveSession no existe
+                  value:
+                    message: "Live session not found"
+                bookingNotFound:
+                  summary: Booking referenciada inexistente (caso teórico)
+                  value:
+                    message: "Booking not found"
+                recordNotFound:
+                  summary: No hay registro de Attendance previo
+                  value:
+                    message: "Attendance record not found"
+        "409":
+          description: El alumno ya se había marcado como entrado (`joinedAt` ya estaba fijado).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RawMessageError"
+              example:
+                message: "Student has already joined the session"
+
+  /api/attendance/session/{sessionId}/student/{studentId}/leave:
+    post:
+      tags: [Attendance]
+      summary: Marcar la salida de un alumno de la sesión
+      description: >
+        Marca el registro de Attendance del alumno como `PRESENT`, fija
+        `leftAt` a la fecha/hora actual y calcula `durationMinutes` como la
+        diferencia en minutos completos (`Math.floor`) entre `leftAt` y
+        `joinedAt`.
+
+        Autorización: ver "Autorización común", incluida la restricción de
+        ownership de alumno por `:studentId`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/sessionId"
+        - $ref: "#/components/parameters/studentId"
+      responses:
+        "200":
+          description: Asistencia actualizada con `leftAt` y `durationMinutes`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Attendance"
+              example:
+                _id: "665a2c3d4e5f6a7b8c9d0e20"
+                liveSession: "665a2c3d4e5f6a7b8c9d0e1f"
+                student: "663e0a1b2c3d4e5f6a7b8c9d"
+                status: "PRESENT"
+                joinedAt: "2026-07-02T09:00:10.000Z"
+                leftAt: "2026-07-02T09:54:00.000Z"
+                durationMinutes: 53
+                createdAt: "2026-07-02T09:00:05.000Z"
+                updatedAt: "2026-07-02T09:54:00.000Z"
+        "400":
+          description: El alumno todavía no se había marcado como entrado (`joinedAt` no está fijado).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RawMessageError"
+              example:
+                message: "Student has not joined the session"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          description: >
+            No existe LiveSession con ese id, no existe la Booking asociada
+            (caso teórico), o no existe registro de Attendance previo para
+            ese alumno/sesión.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RawMessageError"
+              examples:
+                sessionNotFound:
+                  summary: La LiveSession no existe
+                  value:
+                    message: "Live session not found"
+                bookingNotFound:
+                  summary: Booking referenciada inexistente (caso teórico)
+                  value:
+                    message: "Booking not found"
+                recordNotFound:
+                  summary: No hay registro de Attendance previo
+                  value:
+                    message: "Attendance record not found"
+        "409":
+          description: El alumno ya se había marcado como salido (`leftAt` ya estaba fijado).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RawMessageError"
+              example:
+                message: "Student has already left the session"
+
+components:
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    sessionId:
+      name: sessionId
+      in: path
+      required: true
+      description: ObjectId de la LiveSession.
+      schema:
+        type: string
+        example: "665a2c3d4e5f6a7b8c9d0e1f"
+    studentId:
+      name: studentId
+      in: path
+      required: true
+      description: ObjectId del alumno cuyo registro de Attendance se consulta o modifica.
+      schema:
+        type: string
+        example: "663e0a1b2c3d4e5f6a7b8c9d"
+
+  responses:
+    Unauthorized:
+      description: Token de autenticación ausente o inválido.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: "TOKEN_MISSING"
+            message: "Token de autenticación requerido"
+    Forbidden:
+      description: >
+        Comportamiento real de `canAccessAttendance` (en orden de
+        evaluación):
+
+        1. El usuario no es ADMIN, ni el `student`, ni el `teacher` de la
+           Booking asociada a la LiveSession → 403 `Forbidden`.
+        2. Si la ruta incluye `:studentId` **y** el rol del actor es
+           STUDENT **y** `studentId` no coincide con su propio id → 403
+           `Forbidden`.
+
+        **Inconsistencia existente:** la restricción de ownership por
+        `:studentId` solo se aplica cuando `req.user.role === STUDENT`. Un
+        TEACHER que sea el profesor de la booking puede consultar o marcar
+        join/leave del registro de **cualquier** `studentId` en la URL,
+        incluso uno que no pertenezca a esa booking — `canAccessAttendance`
+        no compara `studentId` contra `booking.student` para el rol
+        TEACHER, solo bloquea por rol STUDENT.
+
+        Respuesta generada directamente por el middleware
+        `canAccessAttendance` (no pasa por el `errorHandler` central, por
+        lo que el body no incluye el campo `error`).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/RawMessageError"
+          example:
+            message: "Forbidden"
+    SessionOrBookingNotFound:
+      description: >
+        No existe ninguna LiveSession con ese `sessionId`, o (caso teórico,
+        inalcanzable en la práctica porque `booking` es una referencia
+        obligatoria de `LiveSession`) la Booking referenciada por la
+        sesión no existe.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/RawMessageError"
+          examples:
+            sessionNotFound:
+              summary: La LiveSession no existe
+              value:
+                message: "Live session not found"
+            bookingNotFound:
+              summary: Booking referenciada inexistente (caso teórico)
+              value:
+                message: "Booking not found"
+
+  schemas:
+    Attendance:
+      type: object
+      properties:
+        _id:
+          type: string
+          example: "665a2c3d4e5f6a7b8c9d0e20"
+        liveSession:
+          type: string
+          description: ObjectId de la LiveSession asociada.
+          example: "665a2c3d4e5f6a7b8c9d0e1f"
+        student:
+          type: string
+          description: ObjectId del alumno.
+          example: "663e0a1b2c3d4e5f6a7b8c9d"
+        status:
+          type: string
+          enum: [PRESENT, ABSENT, LATE]
+          example: "PRESENT"
+        joinedAt:
+          type: string
+          format: date-time
+          nullable: true
+          example: null
+        leftAt:
+          type: string
+          format: date-time
+          nullable: true
+          example: null
+        durationMinutes:
+          type: integer
+          minimum: 0
+          example: 0
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    RawMessageError:
+      type: object
+      description: >
+        Forma de error específica de este módulo: las respuestas de error
+        de `attendance.controller.js` y `attendance.authorization.js` se
+        escriben directamente con `res.status(...).json({ message })`, sin
+        pasar por el `errorHandler` central, por lo que no incluyen el
+        campo `error` que sí tienen el resto de respuestas de error de la
+        API (ver `Error`). Mismo patrón que en `liveSessions.yaml`.
+      properties:
+        message:
+          type: string
+          example: "Forbidden"
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+          example: "TOKEN_MISSING"
+        message:
+          type: string
+          example: "Token de autenticación requerido"
+        fields:
+          type: array
+          items:
+            type: object
+            properties:
+              field:
+                type: string
+              message:
+                type: string

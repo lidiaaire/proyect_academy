@@ -1,0 +1,49 @@
+.container {
+  max-width: 700px;
+  margin: 0 auto;
+  padding: 2rem 1rem;
+}
+
+.chartWrapper {
+  width: 100%;
+  height: 400px;
+  margin: 1.5rem 0 2.5rem;
+}
+
+@media (max-width: 480px) {
+  .chartWrapper {
+    height: 300px;
+  }
+}
+
+.infoSection {
+  margin-top: 2.5rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid #e5e7eb;
+}
+
+.infoTitle {
+  font-size: 1rem;
+  font-weight: 600;
+  margin-bottom: 0.75rem;
+}
+
+.infoList {
+  padding-left: 1.25rem;
+  margin-bottom: 1rem;
+}
+
+.infoList li {
+  margin-bottom: 0.4rem;
+}
+
+.infoNote {
+  font-size: 0.875rem;
+  color: #6b7280;
+}
+
+@media (max-width: 480px) {
+  .infoSection {
+    margin-top: 1.5rem;
+  }
+}

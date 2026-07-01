@@ -1,36 +1,45 @@
 'use strict';
 
-/**
- * modules/availability/availability.service.js
- *
- * Métodos:
- *
- *   getAvailabilityTemplate(actorRole, actorId, teacherId)
- *     → Admin: cualquier teacher
- *     → Teacher: solo propio
- *     → Student: solo el de su assignedTeacherId
- *
- *   replaceAvailabilityTemplate(actorRole, actorId, teacherId, slots)
- *     Validaciones (en servicio, no en validator):
- *       - No duplicados: mismo dayOfWeek + startTime
- *       - No solapamientos en mismo día
- *       - Máximo 20 slots
- *       - startTime < endTime
- *     → Reemplaza TeacherProfile.availability completo
- *     Nota: No cancela reservas existentes
- *
- *   getAvailableSlots(actorRole, actorId, teacherId, dateFrom, dateTo)
- *     1. Obtiene plantilla (con scope check)
- *     2. SlotExpander.expand(availability, dateFrom, dateTo)
- *     3. ClassBookingRepository.findByDateRange para reservas activas
- *     4. SlotExpander.markOccupied(daySlots, activeBookings)
- *     → DaySlots[] con available: true/false por slot
- */
+const availabilityRepository = require('../../repositories/availability.repository');
+const { ConflictError, ValidationError } = require('../../utils/ApiError');
 
-// TODO: Implementar en Phase 7
+const overlaps = (aStart, aEnd, bStart, bEnd) => aStart < bEnd && aEnd > bStart;
 
-module.exports = {
-  getAvailabilityTemplate: async () => {},
-  replaceAvailabilityTemplate: async () => {},
-  getAvailableSlots: async () => {},
+const createAvailability = async (teacherId, dayOfWeek, startTime, endTime) => {
+  if (startTime >= endTime) {
+    throw new ValidationError('INVALID_TIME_RANGE', 'startTime debe ser anterior a endTime');
+  }
+
+  const existing = await availabilityRepository.exists(teacherId, dayOfWeek, startTime, endTime);
+  if (existing) {
+    return availabilityRepository.findOne({ teacher: teacherId, dayOfWeek, startTime, endTime });
+  }
+
+  const daySlots = await availabilityRepository.findByTeacherAndDay(teacherId, dayOfWeek);
+  const conflict = daySlots.find(s => overlaps(startTime, endTime, s.startTime, s.endTime));
+  if (conflict) {
+    throw new ConflictError(
+      'AVAILABILITY_OVERLAP',
+      `El intervalo ${startTime}–${endTime} se solapa con un slot existente (${conflict.startTime}–${conflict.endTime})`,
+    );
+  }
+
+  return availabilityRepository.create({
+    teacher:  teacherId,
+    dayOfWeek,
+    startTime,
+    endTime,
+    isActive: true,
+  });
 };
+
+const getMyAvailability = async (teacherId) => {
+  const slots = await availabilityRepository.findActiveByTeacher(teacherId);
+  return slots.sort((a, b) =>
+    a.dayOfWeek !== b.dayOfWeek
+      ? a.dayOfWeek - b.dayOfWeek
+      : a.startTime.localeCompare(b.startTime)
+  );
+};
+
+module.exports = { createAvailability, getMyAvailability };
